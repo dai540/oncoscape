@@ -25,6 +25,26 @@ Build a reproducible HPC pipeline that:
 4. extracts 112 um image tiles and spatial graphs
 5. trains a multi-task model
 6. renders WSI-level prediction maps and reports
+7. generates executive / wet-lab / developer summaries
+
+## Fast Start
+
+If you want the shortest path from clone to a baseline end-to-end run:
+
+1. create the environment
+2. copy `configs/breast_sources.template.yaml` to `/project/run/config/breast_sources.yaml`
+3. replace every placeholder path with real cluster paths
+4. run preflight
+5. run the complete pipeline
+
+Commands:
+
+```bash
+python scripts/00_preflight.py --config configs/breast_hpc.yaml
+python scripts/08_run_pipeline.py --config configs/breast_hpc.yaml
+```
+
+If preflight reports missing files or modules, fix those first and then rerun.
 
 ## Repository Layout
 
@@ -42,6 +62,22 @@ oncoscape/
 ```
 
 ## Standard Pipeline
+
+The pipeline can be run stage by stage, or all at once with `scripts/08_run_pipeline.py`.
+
+### 0. Preflight
+
+```bash
+python scripts/00_preflight.py --config configs/breast_hpc.yaml
+```
+
+Checks:
+
+- manifest exists
+- source entries exist
+- required input files are present
+- output roots are writable
+- required and optional Python modules are visible
 
 ### 1. Register public sources
 
@@ -119,6 +155,18 @@ Outputs:
 - `run/outputs/predictions/<slide_id>/compartment_map.png`
 - `run/outputs/predictions/<slide_id>/composition_maps/*.png`
 - `run/outputs/predictions/<slide_id>/program_maps/*.png`
+
+### 7. Generate reports
+
+```bash
+python scripts/07_generate_reports.py --config configs/breast_hpc.yaml
+```
+
+Outputs:
+
+- `run/outputs/reports/executive_summary.json`
+- `run/outputs/reports/wet_lab_summary.json`
+- `run/outputs/reports/developer_summary.json`
 
 ## Public Data Requirements
 
@@ -213,6 +261,23 @@ The default `breast_hpc.yaml` expects:
 - code at `/project/code/oncoscape`
 - public data under `/project/data/breast`
 - run outputs under `/project/run`
+- a source manifest at `/project/run/config/breast_sources.yaml`
+
+Minimum required source-manifest fields are:
+
+- `name`
+- `source_type`
+- `platform`
+- `patient_id`
+- `slide_id`
+- `image_path`
+- `counts_path`
+- `annotation_path`
+- `coord_path`
+- `mpp_x`
+- `mpp_y`
+- `coord_unit`
+- `split`
 
 Edit:
 
@@ -225,16 +290,25 @@ Then submit:
 sbatch scripts/cluster/run_breast_pipeline.slurm
 ```
 
+The SLURM template runs preflight first, then launches the full pipeline.
+
 ## Current Repository Status
 
-This repository is a clean rebuild scaffold aligned to the v2.0 requirements document.
+This repository is a lightweight, executable baseline aligned to the v2.0 requirements document.
 
 It provides:
 
 - project structure
 - config system
 - manifest schema
-- CLI entry points for the 6-step pipeline
+- CLI entry points for the 7-step pipeline
 - HPC execution template
+- working baseline implementations for register, reference, teachers, patch extraction, training, evaluation, and reporting
 
-It is intended as the new base for full implementation and cluster execution.
+It is intended as the base for cluster execution and future accuracy upgrades.
+
+Notes:
+
+- the default training path is a lightweight baseline model for robust end-to-end execution
+- on environments without parquet support, dataframe outputs fall back to `*.parquet.csv`
+- for highest-accuracy studies, replace the baseline training / teacher modules with stronger implementations while keeping the same config and directory contracts

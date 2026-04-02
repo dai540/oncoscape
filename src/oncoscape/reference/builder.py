@@ -3,7 +3,57 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import anndata as ad
+import numpy as np
+import pandas as pd
+
 from oncoscape.core import ensure_parent, write_json
+
+
+def _resolve_label_column(obs: pd.DataFrame, candidates: list[str]) -> str | None:
+    obs_columns = {col.lower(): col for col in obs.columns}
+    for candidate in candidates:
+        if candidate.lower() in obs_columns:
+            return obs_columns[candidate.lower()]
+    return None
+
+
+def _load_reference_inputs(paths: list[str], max_obs_per_input: int) -> list[ad.AnnData]:
+    adatas: list[ad.AnnData] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        adata = ad.read_h5ad(path)
+        if adata.n_obs > max_obs_per_input:
+            adata = adata[:max_obs_per_input].copy()
+        adatas.append(adata)
+    return adatas
+
+
+def _intersect_and_concat(adatas: list[ad.AnnData]) -> ad.AnnData:
+    if not adatas:
+        raise ValueError("no readable scRNA inputs found for reference atlas")
+    common = set(map(str, adatas[0].var_names))
+    for adata in adatas[1:]:
+        common &= set(map(str, adata.var_names))
+    genes = sorted(common) if common else sorted(map(str, adatas[0].var_names))
+    trimmed = [adata[:, genes].copy() if genes else adata.copy() for adata in adatas]
+    return ad.concat(trimmed, join="inner", label="source_atlas", keys=[f"atlas_{i}" for i in range(len(trimmed))])
+
+
+def _compute_latent(matrix: np.ndarray, latent_dim: int) -> np.ndarray:
+    if matrix.size == 0:
+        return np.zeros((0, latent_dim), dtype=np.float32)
+    centered = matrix - matrix.mean(axis=0, keepdims=True)
+    k = int(min(latent_dim, centered.shape[0], centered.shape[1]))
+    if k == 0:
+        return np.zeros((centered.shape[0], latent_dim), dtype=np.float32)
+    u, s, _ = np.linalg.svd(centered, full_matrices=False)
+    latent = u[:, :k] * s[:k]
+    if k < latent_dim:
+        latent = np.pad(latent, ((0, 0), (0, latent_dim - k)))
+    return latent.astype(np.float32)
 
 
 def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
@@ -14,14 +64,61 @@ def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict
         "output_qc_report_path": str(Path(ref["output_qc_report_path"]).resolve()),
         "num_inputs": int(len(ref.get("input_h5ad_paths", []))),
         "dry_run": dry_run,
-        "status": "scaffold_only",
     }
-    if not dry_run:
-        ensure_parent(ref["output_h5ad_path"]).touch()
-        ensure_parent(ref["output_markers_path"]).write_text("group,rank,gene\n", encoding="utf-8")
-        ensure_parent(ref["output_qc_report_path"]).write_text(
-            "<html><body><h1>oncoscape reference QC scaffold</h1></body></html>",
-            encoding="utf-8",
-        )
-        write_json(Path(ref["output_h5ad_path"]).with_suffix(".summary.json"), outputs)
+    if dry_run:
+        return outputs
+
+    adatas = _load_reference_inputs(ref.get("input_h5ad_paths", []), int(ref.get("max_obs_per_input", 50000)))
+    merged = _intersect_and_concat(adatas)
+    merged.obs_names_make_unique()
+    label_column = _resolve_label_column(merged.obs, list(ref.get("label_candidates", [])))
+    if label_column is None:
+        merged.obs["broad_cell_type"] = ref["broad_cell_types"][0]
+    else:
+        values = merged.obs[label_column].astype(str)
+        broad_classes = ref["broad_cell_types"]
+        assigned = []
+        for value in values:
+            lowered = value.lower()
+            mapped = next((label for label in broad_classes if label.lower() in lowered), broad_classes[0])
+            assigned.append(mapped)
+        merged.obs["broad_cell_type"] = assigned
+
+    matrix = np.asarray(merged.X.todense() if hasattr(merged.X, "todense") else merged.X, dtype=np.float32)
+    matrix = np.log1p(matrix)
+    merged.obsm["X_scvi"] = _compute_latent(matrix, int(ref.get("latent_dim", 32)))
+
+    markers = []
+    gene_frame = pd.DataFrame(matrix, columns=merged.var_names)
+    for label in ref["broad_cell_types"]:
+        mask = merged.obs["broad_cell_type"] == label
+        if mask.sum() == 0:
+            continue
+        class_mean = gene_frame.loc[mask.to_numpy()].mean(axis=0)
+        top = class_mean.sort_values(ascending=False).head(int(ref.get("marker_top_k", 20)))
+        for rank, (gene, score) in enumerate(top.items(), start=1):
+            markers.append({"group": label, "rank": rank, "gene": gene, "score": float(score)})
+
+    output_h5ad = Path(ref["output_h5ad_path"])
+    ensure_parent(output_h5ad)
+    merged.write_h5ad(output_h5ad)
+    pd.DataFrame(markers).to_csv(ref["output_markers_path"], index=False)
+    ensure_parent(ref["output_qc_report_path"]).write_text(
+        (
+            "<html><body><h1>oncoscape reference QC</h1>"
+            f"<p>cells={merged.n_obs}</p><p>genes={merged.n_vars}</p>"
+            f"<p>broad_cell_types={merged.obs['broad_cell_type'].nunique()}</p></body></html>"
+        ),
+        encoding="utf-8",
+    )
+
+    outputs.update(
+        {
+            "num_loaded_inputs": len(adatas),
+            "n_obs": int(merged.n_obs),
+            "n_vars": int(merged.n_vars),
+            "latent_key": "X_scvi",
+        }
+    )
+    write_json(output_h5ad.with_suffix(".summary.json"), outputs)
     return outputs

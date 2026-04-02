@@ -26,12 +26,14 @@ spatial = ["scvi-tools", "cell2location"]
 
 [project.scripts]
 oncoscape-register = "oncoscape.cli.register_data:main"
+oncoscape-preflight = "oncoscape.cli.preflight:main"
 oncoscape-build-reference = "oncoscape.cli.build_reference:main"
 oncoscape-make-teachers = "oncoscape.cli.make_teachers:main"
 oncoscape-extract-patches = "oncoscape.cli.extract_patches:main"
 oncoscape-train-breast = "oncoscape.cli.train_breast:main"
 oncoscape-eval-render = "oncoscape.cli.eval_render:main"
 oncoscape-report = "oncoscape.cli.report:main"
+oncoscape-run = "oncoscape.cli.run_pipeline:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
