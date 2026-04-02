@@ -15,6 +15,7 @@ dependencies:
   - anndata
   - h5py
   - pillow
+  - sphinx
   - pip:
       - timm
       - openslide-python

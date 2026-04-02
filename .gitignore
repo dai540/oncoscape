@@ -7,9 +7,10 @@ data/
 run/
 outputs/
 demo_data/
-docs/
 tmp_*
 tmp_*/
+docs/_build/
+docs/_autosummary/
 
 *.pt
 *.h5ad

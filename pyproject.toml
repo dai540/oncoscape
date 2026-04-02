@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 vision = ["torchvision", "timm", "openslide-python"]
 spatial = ["scvi-tools", "cell2location"]
+docs = ["sphinx>=8.0"]
 
 [project.scripts]
 oncoscape-fetch-public = "oncoscape.cli.fetch_public:main"
