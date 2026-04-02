@@ -19,6 +19,15 @@ COMPARTMENT_KEYWORDS = {
     "necrosis_background": ["necrosis", "background", "blank"],
 }
 
+COMPOSITION_MARKERS = {
+    "malignant": ["EPCAM", "KRT8", "KRT18", "ERBB2"],
+    "CAF": ["COL1A1", "COL1A2", "DCN", "LUM"],
+    "endothelial": ["PECAM1", "VWF", "KDR", "EMCN"],
+    "myeloid": ["LYZ", "FCER1G", "CTSS", "TYROBP"],
+    "T_NK": ["NKG7", "TRBC1", "CD3D", "CD3E"],
+    "B_plasma": ["MS4A1", "CD79A", "MZB1", "JCHAIN"],
+}
+
 
 def _to_dense(x: Any) -> np.ndarray:
     return np.asarray(x.todense() if hasattr(x, "todense") else x, dtype=np.float32)
@@ -80,7 +89,14 @@ def _composition_from_reference(
     slide_block = np.log1p(_to_dense(adata.X)[:, slide_idx])
     denom = np.linalg.norm(slide_block, axis=1, keepdims=True) * np.linalg.norm(ref_block, axis=1, keepdims=True).T
     scores = slide_block @ ref_block.T / np.clip(denom, 1e-8, None)
-    return _softmax(scores.astype(np.float32))
+    marker_scores = np.zeros_like(scores, dtype=np.float32)
+    for class_idx, label in enumerate(broad_cell_types):
+        markers = [gene for gene in COMPOSITION_MARKERS.get(label, []) if gene in var_lookup]
+        if markers:
+            marker_idx = [var_lookup[gene] for gene in markers]
+            marker_scores[:, class_idx] = np.log1p(_to_dense(adata.X)[:, marker_idx]).mean(axis=1)
+    combined = 0.7 * scores.astype(np.float32) + 0.3 * marker_scores
+    return _softmax(combined.astype(np.float32))
 
 
 def _program_scores(adata: ad.AnnData, program_names: list[str]) -> np.ndarray:
@@ -140,7 +156,11 @@ def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, A
                 "teacher_mask_compartment": 1,
                 "teacher_mask_composition": 1,
                 "teacher_mask_program": 1,
-                "teacher_confidence_compartment": teachers["teacher_confidence"]["pathology"] if row["source_type"] == "visium" else teachers["teacher_confidence"]["xenium"],
+                "teacher_confidence_compartment": (
+                    teachers["teacher_confidence"]["pathology"]
+                    if row["source_type"] == "visium" and teachers.get("visium_compartment_annotation_column", "Classification") in adata.obs.columns
+                    else teachers["teacher_confidence"]["fallback"]
+                ),
                 "teacher_confidence_composition": teachers["teacher_confidence"]["xenium"] if row["source_type"] == "xenium" else teachers["teacher_confidence"]["visium"],
                 "teacher_confidence_program": teachers["teacher_confidence"]["fallback"],
             }

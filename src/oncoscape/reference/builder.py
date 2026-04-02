@@ -10,6 +10,16 @@ import pandas as pd
 from oncoscape.core import ensure_parent, write_json
 
 
+CELL_TYPE_MARKERS = {
+    "malignant": ["EPCAM", "KRT8", "KRT18", "ERBB2"],
+    "CAF": ["COL1A1", "COL1A2", "DCN", "LUM"],
+    "endothelial": ["PECAM1", "VWF", "KDR", "EMCN"],
+    "myeloid": ["LYZ", "FCER1G", "CTSS", "TYROBP"],
+    "T_NK": ["NKG7", "TRBC1", "CD3D", "CD3E"],
+    "B_plasma": ["MS4A1", "CD79A", "MZB1", "JCHAIN"],
+}
+
+
 def _resolve_label_column(obs: pd.DataFrame, candidates: list[str]) -> str | None:
     obs_columns = {col.lower(): col for col in obs.columns}
     for candidate in candidates:
@@ -56,6 +66,24 @@ def _compute_latent(matrix: np.ndarray, latent_dim: int) -> np.ndarray:
     return latent.astype(np.float32)
 
 
+def _marker_score_labels(adata: ad.AnnData, broad_cell_types: list[str]) -> list[str]:
+    var_lookup = {str(gene).upper(): idx for idx, gene in enumerate(adata.var_names)}
+    matrix = np.asarray(adata.X.todense() if hasattr(adata.X, "todense") else adata.X, dtype=np.float32)
+    matrix = np.log1p(matrix)
+    labels = []
+    for row in matrix:
+        scores = []
+        for label in broad_cell_types:
+            markers = [marker for marker in CELL_TYPE_MARKERS.get(label, []) if marker in var_lookup]
+            if not markers:
+                scores.append(-1e6)
+            else:
+                idx = [var_lookup[m] for m in markers]
+                scores.append(float(row[idx].mean()))
+        labels.append(broad_cell_types[int(np.argmax(scores))])
+    return labels
+
+
 def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     ref = config["reference"]
     outputs = {
@@ -73,7 +101,7 @@ def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict
     merged.obs_names_make_unique()
     label_column = _resolve_label_column(merged.obs, list(ref.get("label_candidates", [])))
     if label_column is None:
-        merged.obs["broad_cell_type"] = ref["broad_cell_types"][0]
+        merged.obs["broad_cell_type"] = _marker_score_labels(merged, ref["broad_cell_types"])
     else:
         values = merged.obs[label_column].astype(str)
         broad_classes = ref["broad_cell_types"]
@@ -82,7 +110,9 @@ def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict
             lowered = value.lower()
             mapped = next((label for label in broad_classes if label.lower() in lowered), broad_classes[0])
             assigned.append(mapped)
-        merged.obs["broad_cell_type"] = assigned
+        unresolved = [label == broad_classes[0] and broad_classes[0].lower() not in str(v).lower() for label, v in zip(assigned, values)]
+        marker_labels = _marker_score_labels(merged, broad_classes)
+        merged.obs["broad_cell_type"] = [marker_labels[i] if unresolved[i] else assigned[i] for i in range(len(assigned))]
 
     matrix = np.asarray(merged.X.todense() if hasattr(merged.X, "todense") else merged.X, dtype=np.float32)
     matrix = np.log1p(matrix)

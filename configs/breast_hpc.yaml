@@ -119,6 +119,7 @@ training:
   weight_decay: 1.0e-4
   grad_clip_norm: 1.0
   device: cuda
+  model_family: enhanced_classical_ensemble
   encoder_name: convnext_small
   encoder_pretrained: true
   encoder_out_dim: 256
@@ -126,6 +127,7 @@ training:
   spatial_num_layers: 4
   dropout: 0.15
   encoder_batch_tiles: 256
+  spatial_smoothing_radius_um: 160
   loss_weights:
     compartment: 2.0
     composition: 2.0

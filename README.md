@@ -228,6 +228,8 @@ Recommended training conditions:
 - larger breast scRNA reference atlas
 - Visium plus Xenium teachers
 - no tutorial-scale downsampling unless needed for debugging
+- richer tile features and spatial smoothing
+- validation-driven model selection instead of fixed single-model fitting
 
 ## Environment
 
@@ -309,6 +311,6 @@ It is intended as the base for cluster execution and future accuracy upgrades.
 
 Notes:
 
-- the default training path is a lightweight baseline model for robust end-to-end execution
+- the default training path is an enhanced classical baseline with richer image features, validation-driven model selection, and spatial smoothing
 - on environments without parquet support, dataframe outputs fall back to `*.parquet.csv`
 - for highest-accuracy studies, replace the baseline training / teacher modules with stronger implementations while keeping the same config and directory contracts

@@ -10,6 +10,7 @@ import pandas as pd
 from PIL import Image, ImageDraw
 
 from oncoscape.core import ensure_directory, read_frame, write_frame, write_json
+from oncoscape.training.trainer import _feature_matrix
 
 
 COMPARTMENT_COLORS = {
@@ -32,16 +33,8 @@ def _parse_vector(value: Any) -> np.ndarray:
     raise TypeError(f"unsupported vector payload: {type(value)}")
 
 
-def _feature_matrix(frame: pd.DataFrame) -> np.ndarray:
-    from oncoscape.training.trainer import _feature_matrix as trainer_feature_matrix
-
-    return trainer_feature_matrix(frame)
-
-
-def _predict_compartment(x: np.ndarray, model: dict[str, Any]) -> np.ndarray:
-    centroids = np.vstack([model["centroids"][label] for label in model["classes"]])
-    distances = ((x[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
-    return np.asarray([model["classes"][idx] for idx in distances.argmin(axis=1)])
+def _standardize(x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    return (x - mean) / np.clip(std, 1e-6, None)
 
 
 def _macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -71,11 +64,89 @@ def _pearson_mean(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     for idx in range(y_true.shape[1]):
         a = y_true[:, idx]
         b = y_pred[:, idx]
-        if np.std(a) < 1e-8 or np.std(b) < 1e-8:
+        a_center = a - a.mean()
+        b_center = b - b.mean()
+        denom = float(np.sqrt((a_center * a_center).sum()) * np.sqrt((b_center * b_center).sum()))
+        if denom < 1e-8:
             vals.append(0.0)
         else:
-            vals.append(float(np.corrcoef(a, b)[0, 1]))
+            vals.append(float((a_center * b_center).sum() / denom))
     return float(np.mean(vals)) if vals else 0.0
+
+
+def _rbf_features(centers: np.ndarray, x: np.ndarray, gamma: float) -> np.ndarray:
+    d2 = ((x[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+    return np.exp(-gamma * d2).astype(np.float32)
+
+
+def _smooth_composition(coords: np.ndarray, values: np.ndarray, radius: float = 160.0) -> np.ndarray:
+    if len(values) <= 1:
+        return values
+    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
+    neighbors = dist <= radius
+    out = np.zeros_like(values)
+    for i in range(len(values)):
+        out[i] = values[neighbors[i]].mean(axis=0)
+    out = np.clip(out, 0.0, None)
+    return out / np.clip(out.sum(axis=1, keepdims=True), 1e-8, None)
+
+
+def _smooth_programs(coords: np.ndarray, values: np.ndarray, radius: float = 160.0) -> np.ndarray:
+    if len(values) <= 1:
+        return values
+    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
+    neighbors = dist <= radius
+    out = np.zeros_like(values)
+    for i in range(len(values)):
+        out[i] = values[neighbors[i]].mean(axis=0)
+    return out
+
+
+def _smooth_compartments(coords: np.ndarray, labels: np.ndarray, radius: float = 160.0) -> np.ndarray:
+    if len(labels) <= 1:
+        return labels
+    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
+    neighbors = dist <= radius
+    out = []
+    for i in range(len(labels)):
+        vals, counts = np.unique(labels[neighbors[i]], return_counts=True)
+        out.append(vals[counts.argmax()])
+    return np.asarray(out)
+
+
+def _predict_compartment(x: np.ndarray, model_name: str, model: dict[str, Any]) -> np.ndarray:
+    if model_name in {"nearest_centroid", "gaussian_diag"}:
+        labels = []
+        for row in x:
+            scores = []
+            for label in model["classes"]:
+                mu = model["centroids"][label]
+                if model_name == "nearest_centroid":
+                    score = -float(((row - mu) ** 2).sum())
+                else:
+                    var = model["variances"][label]
+                    prior = max(model["priors"][label], 1e-8)
+                    score = -0.5 * float((((row - mu) ** 2) / var).sum() + np.log(var).sum()) + np.log(prior)
+                scores.append(score)
+            labels.append(model["classes"][int(np.argmax(scores))])
+        return np.asarray(labels)
+    scores = x @ model["weights"]
+    idx = scores.argmax(axis=1)
+    return np.asarray([model["classes"][i] for i in idx])
+
+
+def _predict_regression(x: np.ndarray, model: dict[str, Any], task: str) -> np.ndarray:
+    if model["kind"] == "linear":
+        pred = x @ model["weights"]
+    else:
+        pred = _rbf_features(model["centers"], x, model["gamma"]) @ model["weights"]
+    if task == "composition":
+        pred = np.clip(pred, 0.0, None)
+        pred = pred / np.clip(pred.sum(axis=1, keepdims=True), 1e-8, None)
+        pred = _smooth_composition(x[:, -5:-3], pred)
+    else:
+        pred = _smooth_programs(x[:, -5:-3], pred)
+    return pred
 
 
 def _render_class_map(frame: pd.DataFrame, value_column: str, out_path: Path, tile_px: int) -> None:
@@ -136,11 +207,16 @@ def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[s
 
     with Path(render["checkpoint_path"]).open("rb") as handle:
         model = pickle.load(handle)
-    x_eval = _feature_matrix(eval_frame)
-    eval_frame["compartment_pred"] = _predict_compartment(x_eval, model["compartment_model"])
-    composition_pred = np.clip(x_eval @ model["composition_weights"], 0.0, None)
-    composition_pred = composition_pred / np.clip(composition_pred.sum(axis=1, keepdims=True), 1e-8, None)
-    program_pred = x_eval @ model["program_weights"]
+    raw_x = _feature_matrix(eval_frame)
+    x_eval = _standardize(raw_x, model["feature_mean"], model["feature_std"])
+    coords = x_eval[:, -5:-3]
+
+    eval_frame["compartment_pred"] = _smooth_compartments(
+        coords,
+        _predict_compartment(x_eval, model["compartment_model_name"], model["compartment_model"]),
+    )
+    composition_pred = _predict_regression(x_eval, model["composition_model"], "composition")
+    program_pred = _predict_regression(x_eval, model["program_model"], "program")
 
     y_comp = eval_frame["compartment_target"].astype(str).to_numpy()
     y_mix = np.vstack([_parse_vector(v) for v in eval_frame["composition_target"]])
@@ -158,8 +234,8 @@ def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[s
     tile_px = int(render.get("render_tile_px", 24))
     for slide_id, slide_frame in eval_frame.groupby("slide_id"):
         slide_dir = ensure_directory(predictions_dir / str(slide_id))
-        slide_table = slide_frame.copy()
         row_positions = eval_frame.index.get_indexer(slide_frame.index)
+        slide_table = slide_frame.copy()
         for col_idx, name in enumerate(model["composition_classes"]):
             slide_table[f"composition_pred__{name}"] = composition_pred[row_positions, col_idx]
         for prog_idx, name in enumerate(model["programs"]):
