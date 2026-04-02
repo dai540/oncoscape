@@ -1,0 +1,22 @@
+name: oncoscape
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch>=2.2
+  - torchvision
+  - pandas
+  - numpy
+  - scipy
+  - pyarrow
+  - pyyaml
+  - anndata
+  - h5py
+  - pillow
+  - pip:
+      - timm
+      - openslide-python
+      - scvi-tools
+      - cell2location

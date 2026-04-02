@@ -1,0 +1,25 @@
+compartment_classes:
+  - invasive_tumor
+  - in_situ_tumor
+  - stroma
+  - immune_rich
+  - adipose_normal
+  - necrosis_background
+
+composition_classes:
+  - malignant
+  - CAF
+  - endothelial
+  - myeloid
+  - T_NK
+  - B_plasma
+
+programs:
+  - proliferation
+  - EMT
+  - hypoxia
+  - IFN_gamma
+  - inflammatory
+  - angiogenesis
+  - TGFb_like
+  - antigen_presentation

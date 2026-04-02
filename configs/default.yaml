@@ -1,0 +1,67 @@
+project_name: oncoscape
+
+runtime:
+  seed: 17
+  log_level: INFO
+
+paths:
+  project_root: /project
+  code_root: /project/code/oncoscape
+  data_root: /project/data
+  run_root: /project/run
+
+tasks:
+  compartment_classes:
+    - invasive_tumor
+    - in_situ_tumor
+    - stroma
+    - immune_rich
+    - adipose_normal
+    - necrosis_background
+  composition_classes:
+    - malignant
+    - CAF
+    - endothelial
+    - myeloid
+    - T_NK
+    - B_plasma
+  programs:
+    - proliferation
+    - EMT
+    - hypoxia
+    - IFN_gamma
+    - inflammatory
+    - angiogenesis
+    - TGFb_like
+    - antigen_presentation
+
+graph:
+  method: knn
+  k: 8
+
+patching:
+  tile_size_um: 112
+  target_mpp: 0.5
+  patch_size_px: 224
+  tissue_fraction_min: 0.08
+  patch_mean_min: 0.08
+  patch_std_min: 0.03
+
+training:
+  batch_size: 1
+  epochs: 60
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 1.0
+  device: cuda
+  encoder_name: convnext_small
+  encoder_pretrained: true
+  encoder_out_dim: 256
+  hidden_dim: 384
+  spatial_num_layers: 4
+  dropout: 0.15
+  encoder_batch_tiles: 256
+
+evaluation:
+  split: test
+  strict_holdout: true

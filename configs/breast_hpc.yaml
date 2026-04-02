@@ -1,0 +1,162 @@
+extends: default.yaml
+
+project_name: oncoscape-breast-hpc
+
+runtime:
+  seed: 17
+  log_level: INFO
+
+paths:
+  project_root: /project
+  code_root: /project/code/oncoscape
+  data_root: /project/data
+  run_root: /project/run
+
+registration:
+  output_dir: /project/run/data_interim
+  manifest_path: /project/run/config/breast_sources.yaml
+  gene_symbol_map_path: /project/run/data_interim/gene_symbol_map.csv
+  slides_csv_path: /project/run/data_interim/slides.csv
+  adata_dir: /project/run/data_interim/adata
+
+datasets:
+  required:
+    - wu2021_visium
+    - tenx_visium_ffpe
+    - tenx_visium_ff
+    - tenx_xenium_breast
+    - gse176078
+    - gse161529
+  recommended:
+    - gse235326
+
+reference:
+  input_h5ad_paths:
+    - /project/run/data_interim/adata/wu_scrna.h5ad
+    - /project/run/data_interim/adata/gse161529.h5ad
+    - /project/run/data_interim/adata/gse235326.h5ad
+  output_h5ad_path: /project/run/outputs/reference_atlas.h5ad
+  output_markers_path: /project/run/outputs/reference_markers.csv
+  output_qc_report_path: /project/run/outputs/reference_qc_report.html
+  max_obs_per_input: 50000
+  max_genes_for_latent: 4000
+  latent_dim: 32
+  marker_top_k: 20
+  broad_cell_types:
+    - malignant
+    - CAF
+    - endothelial
+    - myeloid
+    - T_NK
+    - B_plasma
+  label_candidates:
+    - broad_cell_type
+    - celltype_major
+    - celltype_minor
+    - celltype_subset
+    - cell_type
+    - annotation
+
+teachers:
+  slides_csv_path: /project/run/data_interim/slides.csv
+  input_adata_dir: /project/run/data_interim/adata
+  reference_h5ad_path: /project/run/outputs/reference_atlas.h5ad
+  output_h5ad_path: /project/run/data_interim/labels/teacher_labels.h5ad
+  output_ontology_json: /project/run/data_interim/labels/ontology.json
+  output_programs_json: /project/run/data_interim/labels/program_definitions.json
+  visium_compartment_annotation_column: Classification
+  compartment_target_column: compartment
+  use_pathology_reviewed_compartments: true
+  use_cell2location: true
+  use_scvi_label_transfer: true
+  fallback_to_signature_scoring: true
+  teacher_confidence:
+    pathology: 1.0
+    xenium: 1.0
+    visium: 0.9
+    fallback: 0.6
+  composition_source_priority:
+    - xenium
+    - visium
+  program_method: gene_set_mean
+  scvi:
+    latent_key: X_scvi
+    n_latent: 32
+    max_epochs: 30
+  cell2location:
+    max_epochs: 3000
+    batch_size: 4096
+    posterior_samples: 128
+
+patch_extraction:
+  slides_csv_path: /project/run/data_interim/slides.csv
+  teacher_labels_path: /project/run/data_interim/labels/teacher_labels.h5ad
+  patches_dir: /project/run/data_interim/patches
+  graphs_dir: /project/run/data_interim/graphs
+  tile_dataset_path: /project/run/data_interim/tile_dataset.parquet
+  image_backend: auto
+  tile_size_um: 112
+  target_mpp: 0.5
+  patch_size_px: 224
+  tissue_fraction_min: 0.08
+  patch_mean_min: 0.08
+  patch_std_min: 0.03
+  num_workers: 8
+
+train_run:
+  tile_dataset_path: /project/run/data_interim/tile_dataset.parquet
+  checkpoint_dir: /project/run/outputs/checkpoints
+  report_dir: /project/run/outputs/reports
+  strict_holdout: true
+  holdout_keys:
+    - patient_id
+    - source
+
+training:
+  batch_size: 1
+  epochs: 60
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip_norm: 1.0
+  device: cuda
+  encoder_name: convnext_small
+  encoder_pretrained: true
+  encoder_out_dim: 256
+  hidden_dim: 384
+  spatial_num_layers: 4
+  dropout: 0.15
+  encoder_batch_tiles: 256
+  loss_weights:
+    compartment: 2.0
+    composition: 2.0
+    program: 1.0
+    smooth: 0.05
+
+evaluation:
+  split: test
+  strict_holdout: true
+  metrics:
+    compartment:
+      - macro_f1
+      - balanced_accuracy
+    composition:
+      - js_divergence
+      - pearson
+      - spearman
+    programs:
+      - pearson
+      - spearman
+    slide_level:
+      - region_consistency
+      - human_review_flag
+
+render:
+  checkpoint_path: /project/run/outputs/checkpoints/best.pt
+  predictions_dir: /project/run/outputs/predictions
+  report_dir: /project/run/outputs/reports
+  render_tile_px: 24
+
+reporting:
+  executive_summary_path: /project/run/outputs/reports/executive_summary.json
+  wet_lab_summary_path: /project/run/outputs/reports/wet_lab_summary.json
+  developer_summary_path: /project/run/outputs/reports/developer_summary.json

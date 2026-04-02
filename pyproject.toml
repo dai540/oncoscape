@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oncoscape"
+version = "0.1.0"
+description = "HPC-first public-data pipeline for H&E-to-spatial-biology modeling"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "anndata",
+  "h5py",
+  "numpy",
+  "pandas",
+  "Pillow",
+  "pyarrow",
+  "PyYAML",
+  "scipy",
+  "torch",
+]
+
+[project.optional-dependencies]
+vision = ["torchvision", "timm", "openslide-python"]
+spatial = ["scvi-tools", "cell2location"]
+
+[project.scripts]
+oncoscape-register = "oncoscape.cli.register_data:main"
+oncoscape-build-reference = "oncoscape.cli.build_reference:main"
+oncoscape-make-teachers = "oncoscape.cli.make_teachers:main"
+oncoscape-extract-patches = "oncoscape.cli.extract_patches:main"
+oncoscape-train-breast = "oncoscape.cli.train_breast:main"
+oncoscape-eval-render = "oncoscape.cli.eval_render:main"
+oncoscape-report = "oncoscape.cli.report:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
