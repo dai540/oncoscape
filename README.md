@@ -32,14 +32,16 @@ Build a reproducible HPC pipeline that:
 If you want the shortest path from clone to a baseline end-to-end run:
 
 1. create the environment
-2. copy `configs/breast_sources.template.yaml` to `/project/run/config/breast_sources.yaml`
-3. replace every placeholder path with real cluster paths
-4. run preflight
-5. run the complete pipeline
+2. optionally fetch public bundles with the download catalog
+3. copy `configs/breast_sources.template.yaml` to `/project/run/config/breast_sources.yaml`
+4. replace every placeholder path with real cluster paths
+5. run preflight
+6. run the complete pipeline
 
 Commands:
 
 ```bash
+python scripts/00_fetch_public_data.py --config configs/breast_hpc.yaml --dry-run
 python scripts/00_preflight.py --config configs/breast_hpc.yaml
 python scripts/08_run_pipeline.py --config configs/breast_hpc.yaml
 ```
@@ -64,6 +66,22 @@ oncoscape/
 ## Standard Pipeline
 
 The pipeline can be run stage by stage, or all at once with `scripts/08_run_pipeline.py`.
+
+### Optional. Fetch public bundles
+
+```bash
+python scripts/00_fetch_public_data.py --config configs/breast_hpc.yaml
+```
+
+Prepare:
+
+- copy `configs/breast_downloads.template.yaml` to `/project/run/config/breast_downloads.yaml`
+- edit the catalog if your institution mirrors or rewrites the public URLs
+
+Outputs:
+
+- downloaded public bundles under `/project/data`
+- `fetch_summary.json`
 
 ### 0. Preflight
 
@@ -255,6 +273,7 @@ pip install -e .
 Before running the pipeline, prepare the two required config files:
 
 - use `configs/breast_hpc.yaml` as the HPC pipeline template
+- optionally copy `configs/breast_downloads.template.yaml` to `/project/run/config/breast_downloads.yaml`
 - copy `configs/breast_sources.template.yaml` to `/project/run/config/breast_sources.yaml`
 - replace every placeholder path in `/project/run/config/breast_sources.yaml` with the real public-data locations on your cluster
 
@@ -306,6 +325,9 @@ It provides:
 - CLI entry points for the 7-step pipeline
 - HPC execution template
 - working baseline implementations for register, reference, teachers, patch extraction, training, evaluation, and reporting
+- optional public-data fetch automation
+- deterministic split file generation
+- provenance capture via git commit and config hash
 
 It is intended as the base for cluster execution and future accuracy upgrades.
 

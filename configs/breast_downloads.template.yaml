@@ -1,0 +1,24 @@
+downloads:
+  - name: wu2021_visium_metadata
+    url: https://zenodo.org/records/4739739/files/metadata.tar.gz
+    target_relpath: breast/wu2021_visium/metadata.tar.gz
+
+  - name: wu2021_visium_spatial
+    url: https://zenodo.org/records/4739739/files/spatial.tar.gz
+    target_relpath: breast/wu2021_visium/spatial.tar.gz
+
+  - name: wu2021_visium_filtered_counts
+    url: https://zenodo.org/records/4739739/files/filtered_count_matrices.tar.gz
+    target_relpath: breast/wu2021_visium/filtered_count_matrices.tar.gz
+
+  - name: gse176078_series
+    url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE176nnn/GSE176078/matrix/GSE176078_series_matrix.txt.gz
+    target_relpath: breast/wu_scrna/GSE176078_series_matrix.txt.gz
+
+  - name: gse161529_raw
+    url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE161nnn/GSE161529/suppl/GSE161529_RAW.tar
+    target_relpath: breast/gse161529/GSE161529_RAW.tar
+
+  - name: gse235326_raw
+    url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE235nnn/GSE235326/suppl/GSE235326_RAW.tar
+    target_relpath: breast/gse235326/GSE235326_RAW.tar

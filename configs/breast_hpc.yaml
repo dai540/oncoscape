@@ -12,6 +12,10 @@ paths:
   data_root: /project/data
   run_root: /project/run
 
+fetch:
+  catalog_path: /project/run/config/breast_downloads.yaml
+  output_root: /project/data
+
 registration:
   output_dir: /project/run/data_interim
   manifest_path: /project/run/config/breast_sources.yaml
