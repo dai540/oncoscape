@@ -7,6 +7,7 @@ def build_model_spec(config: dict[str, Any]) -> dict[str, Any]:
     train = config["training"]
     tasks = config["tasks"]
     return {
+        "model_family": train.get("model_family", "deep_spatial_multitask"),
         "encoder_name": train["encoder_name"],
         "encoder_pretrained": bool(train["encoder_pretrained"]),
         "encoder_out_dim": int(train["encoder_out_dim"]),

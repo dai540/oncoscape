@@ -10,6 +10,8 @@ import pandas as pd
 from PIL import Image
 
 from oncoscape.core import ensure_directory, read_frame, write_json
+from oncoscape.evaluation.metrics import balanced_accuracy, js_divergence, macro_f1, pearson_mean
+from oncoscape.models import DeepSpatialMultiTaskModel, build_model_spec
 
 
 def _parse_vector(value: Any) -> np.ndarray:
@@ -95,43 +97,6 @@ def _standardize(train_x: np.ndarray, other_x: np.ndarray) -> tuple[np.ndarray, 
     return (train_x - mean) / std, (other_x - mean) / std, mean.astype(np.float32), std.astype(np.float32)
 
 
-def _balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    scores = []
-    for label in sorted(pd.Series(y_true).unique()):
-        mask = y_true == label
-        if mask.sum():
-            scores.append(float((y_pred[mask] == label).mean()))
-    return float(np.mean(scores)) if scores else 0.0
-
-
-def _macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    labels = sorted(set(map(str, y_true)) | set(map(str, y_pred)))
-    vals = []
-    for label in labels:
-        tp = np.sum((y_true == label) & (y_pred == label))
-        fp = np.sum((y_true != label) & (y_pred == label))
-        fn = np.sum((y_true == label) & (y_pred != label))
-        precision = tp / max(tp + fp, 1)
-        recall = tp / max(tp + fn, 1)
-        vals.append(0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall))
-    return float(np.mean(vals)) if vals else 0.0
-
-
-def _pearson_mean(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    vals = []
-    for idx in range(y_true.shape[1]):
-        a = y_true[:, idx]
-        b = y_pred[:, idx]
-        a_center = a - a.mean()
-        b_center = b - b.mean()
-        denom = float(np.sqrt((a_center * a_center).sum()) * np.sqrt((b_center * b_center).sum()))
-        if denom < 1e-8:
-            vals.append(0.0)
-        else:
-            vals.append(float((a_center * b_center).sum() / denom))
-    return float(np.mean(vals)) if vals else 0.0
-
-
 def _fit_ridge(x: np.ndarray, y: np.ndarray, weight: np.ndarray, alpha: float) -> np.ndarray:
     w = np.sqrt(np.clip(weight, 1e-8, None))[:, None]
     xw = x * w
@@ -207,9 +172,7 @@ def _smooth_composition(coords: np.ndarray, values: np.ndarray, radius: float = 
     neighbors = dist <= radius
     smoothed = np.zeros_like(values)
     for i in range(len(values)):
-        mask = neighbors[i]
-        block = values[mask]
-        smoothed[i] = block.mean(axis=0)
+        smoothed[i] = values[neighbors[i]].mean(axis=0)
     smoothed = np.clip(smoothed, 0.0, None)
     return smoothed / np.clip(smoothed.sum(axis=1, keepdims=True), 1e-8, None)
 
@@ -247,7 +210,13 @@ def _split_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train.reset_index(drop=True), val.reset_index(drop=True)
 
 
-def _select_compartment_model(x_train: np.ndarray, y_train: np.ndarray, x_val: np.ndarray, y_val: np.ndarray) -> tuple[dict[str, Any], dict[str, float]]:
+def _select_compartment_model(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_val: np.ndarray,
+    y_val: np.ndarray,
+    smoothing_radius: float = 160.0,
+) -> tuple[dict[str, Any], dict[str, float]]:
     candidates = []
     centroid_model = _fit_centroid_classifier(x_train, y_train)
     candidates.append(("nearest_centroid", centroid_model, _predict_centroid_classifier(x_val, centroid_model, "nearest_centroid")))
@@ -255,15 +224,11 @@ def _select_compartment_model(x_train: np.ndarray, y_train: np.ndarray, x_val: n
     for alpha in (1e-3, 1e-2, 1e-1, 1.0):
         linear_model = _fit_linear_classifier(x_train, y_train, alpha)
         candidates.append((f"ridge_ovr_{alpha}", linear_model, _predict_linear_classifier(x_val, linear_model)))
-
     best = None
     best_metrics = None
     for name, model, pred in candidates:
-        pred = _smooth_compartments(x_val[:, -5:-3], pred)
-        metrics = {
-            "macro_f1": _macro_f1(y_val, pred),
-            "balanced_accuracy": _balanced_accuracy(y_val, pred),
-        }
+        pred = _smooth_compartments(x_val[:, -5:-3], pred, radius=smoothing_radius)
+        metrics = {"macro_f1": macro_f1(y_val, pred), "balanced_accuracy": balanced_accuracy(y_val, pred)}
         if best is None or metrics["macro_f1"] > best_metrics["macro_f1"]:
             best = {"name": name, "model": model}
             best_metrics = metrics
@@ -277,6 +242,7 @@ def _select_regression_model(
     x_val: np.ndarray,
     y_val: np.ndarray,
     task: str,
+    smoothing_radius: float = 160.0,
 ) -> tuple[dict[str, Any], float]:
     candidates = []
     for alpha in (1e-4, 1e-3, 1e-2, 1e-1, 1.0):
@@ -290,24 +256,23 @@ def _select_regression_model(
             weights = _fit_ridge(train_phi, y_train, weight, alpha)
             pred = val_phi @ weights
             candidates.append((f"rbf_ridge_g{gamma}_a{alpha}", {"kind": "rbf", "weights": weights, "gamma": gamma, "centers": centers, "alpha": alpha}, pred))
-
     best = None
     best_score = None
     for name, model, pred in candidates:
         if task == "composition":
             pred = np.clip(pred, 0.0, None)
             pred = pred / np.clip(pred.sum(axis=1, keepdims=True), 1e-8, None)
-            pred = _smooth_composition(x_val[:, -5:-3], pred)
+            pred = _smooth_composition(x_val[:, -5:-3], pred, radius=smoothing_radius)
         else:
-            pred = _smooth_programs(x_val[:, -5:-3], pred)
-        score = _pearson_mean(y_val, pred)
+            pred = _smooth_programs(x_val[:, -5:-3], pred, radius=smoothing_radius)
+        score = pearson_mean(y_val, pred)
         if best is None or score > best_score:
             best = {"name": name, "model": model}
             best_score = score
     return best, float(best_score)
 
 
-def _predict_regression(x: np.ndarray, model: dict[str, Any], task: str) -> np.ndarray:
+def _predict_regression(x: np.ndarray, model: dict[str, Any], task: str, smoothing_radius: float = 160.0) -> np.ndarray:
     if model["kind"] == "linear":
         pred = x @ model["weights"]
     else:
@@ -316,32 +281,242 @@ def _predict_regression(x: np.ndarray, model: dict[str, Any], task: str) -> np.n
     if task == "composition":
         pred = np.clip(pred, 0.0, None)
         pred = pred / np.clip(pred.sum(axis=1, keepdims=True), 1e-8, None)
-        pred = _smooth_composition(x[:, -5:-3], pred)
+        pred = _smooth_composition(x[:, -5:-3], pred, radius=smoothing_radius)
     else:
-        pred = _smooth_programs(x[:, -5:-3], pred)
+        pred = _smooth_programs(x[:, -5:-3], pred, radius=smoothing_radius)
     return pred
 
 
-def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
-    cfg = config["train_run"]
-    training = config["training"]
-    checkpoint_dir = Path(cfg["checkpoint_dir"])
-    report_dir = Path(cfg["report_dir"])
-    summary = {
-        "checkpoint_dir": str(checkpoint_dir.resolve()),
-        "report_dir": str(report_dir.resolve()),
-        "epochs": int(training["epochs"]),
-        "device": str(training["device"]),
-        "dry_run": dry_run,
+def _save_pickle(path: Path, payload: dict[str, Any]) -> None:
+    with path.open("wb") as handle:
+        pickle.dump(payload, handle)
+
+
+def _load_graph(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    with Path(path).open("rb") as handle:
+        graph = pickle.load(handle)
+    edge_index = np.asarray(graph["edge_index"], dtype=np.int64)
+    coords = np.asarray(graph["coords_um"], dtype=np.float32)
+    return edge_index, coords
+
+
+def _load_patch_tensor(path: str | Path, torch_module) -> Any:
+    image = Image.open(path).convert("RGB")
+    arr = np.asarray(image, dtype=np.float32) / 255.0
+    return torch_module.from_numpy(arr.transpose(2, 0, 1)).float()
+
+
+def _prepare_slide_batch(frame: pd.DataFrame, compartments: list[str], torch_module, device: str) -> dict[str, Any]:
+    graph_path = frame["graph_path"].iloc[0]
+    edge_index_np, coords_np = _load_graph(graph_path)
+    patches = torch_module.stack([_load_patch_tensor(path, torch_module) for path in frame["patch_path"].tolist()]).to(device)
+    coords = torch_module.tensor(frame[["x_um", "y_um"]].to_numpy(dtype=np.float32), device=device)
+    edge_index = torch_module.tensor(edge_index_np, dtype=torch_module.long, device=device)
+    comp_lookup = {label: idx for idx, label in enumerate(compartments)}
+    compartment_target = torch_module.tensor(
+        [comp_lookup[str(value)] for value in frame["compartment_target"].tolist()],
+        dtype=torch_module.long,
+        device=device,
+    )
+    composition_target = torch_module.tensor(
+        np.vstack([_parse_vector(v) for v in frame["composition_target"]]),
+        dtype=torch_module.float32,
+        device=device,
+    )
+    program_target = torch_module.tensor(
+        np.vstack([_parse_vector(v) for v in frame["program_target"]]),
+        dtype=torch_module.float32,
+        device=device,
+    )
+    return {
+        "slide_id": frame["slide_id"].iloc[0],
+        "patches": patches,
+        "coords": coords,
+        "edge_index": edge_index,
+        "compartment_target": compartment_target,
+        "composition_target": composition_target,
+        "program_target": program_target,
+        "compartment_weight": torch_module.tensor(frame["teacher_confidence_compartment"].to_numpy(dtype=np.float32), device=device),
+        "composition_weight": torch_module.tensor(frame["teacher_confidence_composition"].to_numpy(dtype=np.float32), device=device),
+        "program_weight": torch_module.tensor(frame["teacher_confidence_program"].to_numpy(dtype=np.float32), device=device),
+        "coords_np": coords_np,
     }
-    if dry_run:
-        return summary
 
-    ensure_directory(checkpoint_dir)
-    ensure_directory(report_dir)
 
-    frame = read_frame(cfg["tile_dataset_path"])
-    frame = frame[frame["qc_pass"]].reset_index(drop=True)
+def _deep_losses(outputs: dict[str, Any], batch: dict[str, Any], weights: dict[str, float], torch_module) -> tuple[Any, dict[str, float]]:
+    import torch.nn.functional as F  # type: ignore
+
+    comp_loss = F.cross_entropy(outputs["compartment_logits"], batch["compartment_target"], reduction="none")
+    comp_loss = (comp_loss * batch["compartment_weight"]).mean()
+
+    pred_comp = outputs["composition_logits"].softmax(dim=1).clamp_min(1e-8)
+    true_comp = batch["composition_target"].clamp_min(1e-8)
+    true_comp = true_comp / true_comp.sum(dim=1, keepdim=True).clamp_min(1e-8)
+    mean = 0.5 * (pred_comp + true_comp)
+    js = 0.5 * (
+        (true_comp * (true_comp.log() - mean.log())).sum(dim=1)
+        + (pred_comp * (pred_comp.log() - mean.log())).sum(dim=1)
+    )
+    composition_loss = (js * batch["composition_weight"]).mean()
+
+    huber = F.huber_loss(outputs["program_values"], batch["program_target"], reduction="none")
+    program_loss = (huber.mean(dim=1) * batch["program_weight"]).mean()
+
+    if outputs["latent"].shape[0] > 1 and batch["edge_index"].numel() > 0:
+        src, dst = batch["edge_index"]
+        smooth = ((outputs["latent"][src] - outputs["latent"][dst]) ** 2).mean()
+    else:
+        smooth = outputs["latent"].new_tensor(0.0)
+
+    total = (
+        weights["compartment"] * comp_loss
+        + weights["composition"] * composition_loss
+        + weights["program"] * program_loss
+        + weights["smooth"] * smooth
+    )
+    return total, {
+        "compartment_loss": float(comp_loss.detach().cpu()),
+        "composition_loss": float(composition_loss.detach().cpu()),
+        "program_loss": float(program_loss.detach().cpu()),
+        "smooth_loss": float(smooth.detach().cpu()),
+    }
+
+
+def _evaluate_deep(model, slide_batches: list[dict[str, Any]], tasks: dict[str, Any], torch_module) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    model.eval()
+    comp_true = []
+    comp_pred = []
+    mix_true = []
+    mix_pred = []
+    prog_true = []
+    prog_pred = []
+    per_slide = []
+    with torch_module.no_grad():
+        for batch in slide_batches:
+            outputs = model(batch["patches"], batch["coords"], batch["edge_index"])
+            pred_comp = outputs["compartment_logits"].argmax(dim=1).cpu().numpy()
+            pred_mix = outputs["composition_logits"].softmax(dim=1).cpu().numpy()
+            pred_prog = outputs["program_values"].cpu().numpy()
+            true_comp = batch["compartment_target"].cpu().numpy()
+            true_mix = batch["composition_target"].cpu().numpy()
+            true_prog = batch["program_target"].cpu().numpy()
+            comp_true.append(true_comp)
+            comp_pred.append(pred_comp)
+            mix_true.append(true_mix)
+            mix_pred.append(pred_mix)
+            prog_true.append(true_prog)
+            prog_pred.append(pred_prog)
+            per_slide.append(
+                {
+                    "slide_id": batch["slide_id"],
+                    "n_tiles": int(len(true_comp)),
+                    "compartment_macro_f1": macro_f1(true_comp, pred_comp),
+                }
+            )
+    comp_true_all = np.concatenate(comp_true) if comp_true else np.asarray([])
+    comp_pred_all = np.concatenate(comp_pred) if comp_pred else np.asarray([])
+    mix_true_all = np.vstack(mix_true) if mix_true else np.zeros((0, len(tasks["composition_classes"])))
+    mix_pred_all = np.vstack(mix_pred) if mix_pred else np.zeros((0, len(tasks["composition_classes"])))
+    prog_true_all = np.vstack(prog_true) if prog_true else np.zeros((0, len(tasks["programs"])))
+    prog_pred_all = np.vstack(prog_pred) if prog_pred else np.zeros((0, len(tasks["programs"])))
+    metrics = {
+        "macro_f1": macro_f1(comp_true_all, comp_pred_all) if len(comp_true_all) else 0.0,
+        "balanced_accuracy": balanced_accuracy(comp_true_all, comp_pred_all) if len(comp_true_all) else 0.0,
+        "composition_mean_pearson": pearson_mean(mix_true_all, mix_pred_all) if len(mix_true_all) else 0.0,
+        "composition_js_divergence": js_divergence(mix_true_all, mix_pred_all) if len(mix_true_all) else 0.0,
+        "program_mean_pearson": pearson_mean(prog_true_all, prog_pred_all) if len(prog_true_all) else 0.0,
+    }
+    return metrics, per_slide
+
+
+def _train_deep_model(config: dict[str, Any], frame: pd.DataFrame, checkpoint_dir: Path, report_dir: Path) -> dict[str, Any]:
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - explicit runtime guard
+        raise RuntimeError("deep_spatial_multitask requires torch to be installed") from exc
+
+    train_frame, val_frame = _split_frame(frame)
+    if train_frame.empty or val_frame.empty:
+        raise ValueError("training requires non-empty train and val splits")
+
+    device = config["training"]["device"]
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        device = "cpu"
+
+    tasks = config["tasks"]
+    spec = build_model_spec(config) | {"model_family": config["training"].get("model_family", "deep_spatial_multitask")}
+    model = DeepSpatialMultiTaskModel(spec).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(config["training"]["lr"]),
+        weight_decay=float(config["training"]["weight_decay"]),
+    )
+    loss_weights = {key: float(value) for key, value in config["training"]["loss_weights"].items()}
+    smoothing_radius = float(config["training"].get("spatial_smoothing_radius_um", 160.0))
+
+    train_batches = [
+        _prepare_slide_batch(slide_frame.reset_index(drop=True), tasks["compartment_classes"], torch, device)
+        for _, slide_frame in train_frame.groupby("slide_id")
+    ]
+    val_batches = [
+        _prepare_slide_batch(slide_frame.reset_index(drop=True), tasks["compartment_classes"], torch, device)
+        for _, slide_frame in val_frame.groupby("slide_id")
+    ]
+
+    best_metrics = None
+    best_state = None
+    train_history = []
+    val_history = []
+    epochs = int(config["training"]["epochs"])
+    for epoch in range(1, epochs + 1):
+        model.train()
+        epoch_losses = []
+        for batch in train_batches:
+            optimizer.zero_grad()
+            outputs = model(batch["patches"], batch["coords"], batch["edge_index"])
+            loss, parts = _deep_losses(outputs, batch, loss_weights, torch)
+            loss.backward()
+            if float(config["training"]["grad_clip_norm"]) > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(config["training"]["grad_clip_norm"]))
+            optimizer.step()
+            epoch_losses.append({"loss": float(loss.detach().cpu()), **parts})
+        avg_train_loss = float(np.mean([item["loss"] for item in epoch_losses])) if epoch_losses else 0.0
+        val_metrics, per_slide = _evaluate_deep(model, val_batches, tasks, torch)
+        score = val_metrics["macro_f1"] + 0.5 * val_metrics["composition_mean_pearson"] + 0.25 * val_metrics["program_mean_pearson"]
+        train_history.append({"epoch": epoch, "train_loss": avg_train_loss})
+        val_history.append({"epoch": epoch, **val_metrics})
+        if best_metrics is None or score > best_metrics["selection_score"]:
+            best_metrics = {"selection_score": score, **val_metrics}
+            best_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
+            best_per_slide = per_slide
+
+    payload = {
+        "model_family": "deep_spatial_multitask",
+        "model_spec": spec,
+        "state_dict": best_state,
+        "composition_classes": tasks["composition_classes"],
+        "programs": tasks["programs"],
+        "compartment_classes": tasks["compartment_classes"],
+        "val_metrics": best_metrics,
+        "spatial_smoothing_radius_um": smoothing_radius,
+    }
+    torch.save(payload, checkpoint_dir / "best.pt")
+    torch.save(payload, checkpoint_dir / "last.pt")
+    pd.DataFrame(train_history).to_csv(report_dir / "train_metrics.csv", index=False)
+    pd.DataFrame(val_history).to_csv(report_dir / "val_metrics.csv", index=False)
+    summary = {
+        "train_rows": int(len(train_frame)),
+        "val_rows": int(len(val_frame)),
+        "model_family": "deep_spatial_multitask",
+        "val_metrics": best_metrics,
+        "per_slide_val_metrics": best_per_slide,
+        "device": device,
+    }
+    write_json(report_dir / "train_summary.json", summary)
+    return summary
+
+
+def _train_classical_model(config: dict[str, Any], frame: pd.DataFrame, checkpoint_dir: Path, report_dir: Path) -> dict[str, Any]:
     train_frame, val_frame = _split_frame(frame)
     if train_frame.empty or val_frame.empty:
         raise ValueError("training requires non-empty train and val splits")
@@ -355,8 +530,9 @@ def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[st
     y_mix_val = np.vstack([_parse_vector(v) for v in val_frame["composition_target"]])
     y_prog_train = np.vstack([_parse_vector(v) for v in train_frame["program_target"]])
     y_prog_val = np.vstack([_parse_vector(v) for v in val_frame["program_target"]])
+    smoothing_radius = float(config["training"].get("spatial_smoothing_radius_um", 160.0))
 
-    best_compartment, comp_metrics = _select_compartment_model(x_train, y_comp_train, x_val, y_comp_val)
+    best_compartment, comp_metrics = _select_compartment_model(x_train, y_comp_train, x_val, y_comp_val, smoothing_radius)
     best_composition, compo_score = _select_regression_model(
         x_train,
         y_mix_train,
@@ -364,6 +540,7 @@ def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[st
         x_val,
         y_mix_val,
         "composition",
+        smoothing_radius,
     )
     best_program, prog_score = _select_regression_model(
         x_train,
@@ -372,42 +549,32 @@ def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[st
         x_val,
         y_prog_val,
         "program",
+        smoothing_radius,
     )
 
     comp_val_pred = (
-        _smooth_compartments(x_val[:, -5:-3], _predict_centroid_classifier(x_val, best_compartment["model"], "nearest_centroid"))
+        _smooth_compartments(x_val[:, -5:-3], _predict_centroid_classifier(x_val, best_compartment["model"], "nearest_centroid"), radius=smoothing_radius)
         if best_compartment["name"] == "nearest_centroid"
         else _smooth_compartments(
             x_val[:, -5:-3],
             _predict_centroid_classifier(x_val, best_compartment["model"], "gaussian_diag")
             if best_compartment["name"] == "gaussian_diag"
             else _predict_linear_classifier(x_val, best_compartment["model"]),
+            radius=smoothing_radius,
         )
     )
-    mix_val_pred = _predict_regression(x_val, best_composition["model"], "composition")
-    prog_val_pred = _predict_regression(x_val, best_program["model"], "program")
+    mix_val_pred = _predict_regression(x_val, best_composition["model"], "composition", smoothing_radius=smoothing_radius)
+    prog_val_pred = _predict_regression(x_val, best_program["model"], "program", smoothing_radius=smoothing_radius)
 
     val_metrics = {
-        "macro_f1": _macro_f1(y_comp_val, comp_val_pred),
-        "balanced_accuracy": _balanced_accuracy(y_comp_val, comp_val_pred),
-        "composition_mean_pearson": _pearson_mean(y_mix_val, mix_val_pred),
-        "program_mean_pearson": _pearson_mean(y_prog_val, prog_val_pred),
+        "macro_f1": macro_f1(y_comp_val, comp_val_pred),
+        "balanced_accuracy": balanced_accuracy(y_comp_val, comp_val_pred),
+        "composition_mean_pearson": pearson_mean(y_mix_val, mix_val_pred),
+        "composition_js_divergence": js_divergence(y_mix_val, mix_val_pred),
+        "program_mean_pearson": pearson_mean(y_prog_val, prog_val_pred),
     }
-    train_metrics = {
-        "epoch": 1,
-        "train_rows": int(len(train_frame)),
-        "val_rows": int(len(val_frame)),
-        "compartment_model": best_compartment["name"],
-        "composition_model": best_composition["name"],
-        "program_model": best_program["name"],
-        "composition_val_score": compo_score,
-        "program_val_score": prog_score,
-    }
-
     model_payload = {
-        "feature_names": [
-            "rgb_mean_std_hist_texture_grid_spatial",
-        ],
+        "model_family": "enhanced_classical_ensemble",
         "feature_mean": mean,
         "feature_std": std,
         "compartment_model_name": best_compartment["name"],
@@ -418,14 +585,62 @@ def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[st
         "program_model": best_program["model"],
         "composition_classes": config["tasks"]["composition_classes"],
         "programs": config["tasks"]["programs"],
+        "compartment_classes": config["tasks"]["compartment_classes"],
+        "val_metrics": val_metrics,
+        "spatial_smoothing_radius_um": smoothing_radius,
+    }
+    _save_pickle(checkpoint_dir / "best.pt", model_payload)
+    _save_pickle(checkpoint_dir / "last.pt", model_payload)
+    pd.DataFrame(
+        [
+            {
+                "epoch": 1,
+                "train_rows": int(len(train_frame)),
+                "val_rows": int(len(val_frame)),
+                "compartment_model": best_compartment["name"],
+                "composition_model": best_composition["name"],
+                "program_model": best_program["name"],
+                "composition_val_score": compo_score,
+                "program_val_score": prog_score,
+            }
+        ]
+    ).to_csv(report_dir / "train_metrics.csv", index=False)
+    pd.DataFrame([{"epoch": 1, **val_metrics}]).to_csv(report_dir / "val_metrics.csv", index=False)
+    summary = {
+        "train_rows": int(len(train_frame)),
+        "val_rows": int(len(val_frame)),
+        "model_family": "enhanced_classical_ensemble",
         "val_metrics": val_metrics,
     }
-    with Path(checkpoint_dir / "best.pt").open("wb") as handle:
-        pickle.dump(model_payload, handle)
-    with Path(checkpoint_dir / "last.pt").open("wb") as handle:
-        pickle.dump(model_payload, handle)
-    pd.DataFrame([train_metrics]).to_csv(report_dir / "train_metrics.csv", index=False)
-    pd.DataFrame([{"epoch": 1, **val_metrics}]).to_csv(report_dir / "val_metrics.csv", index=False)
-    summary.update({"train_rows": int(len(train_frame)), "val_rows": int(len(val_frame)), "val_metrics": val_metrics})
     write_json(report_dir / "train_summary.json", summary)
+    return summary
+
+
+def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
+    cfg = config["train_run"]
+    training = config["training"]
+    checkpoint_dir = Path(cfg["checkpoint_dir"])
+    report_dir = Path(cfg["report_dir"])
+    summary = {
+        "checkpoint_dir": str(checkpoint_dir.resolve()),
+        "report_dir": str(report_dir.resolve()),
+        "epochs": int(training["epochs"]),
+        "device": str(training["device"]),
+        "model_family": str(training.get("model_family", "deep_spatial_multitask")),
+        "dry_run": dry_run,
+    }
+    if dry_run:
+        return summary
+
+    ensure_directory(checkpoint_dir)
+    ensure_directory(report_dir)
+    frame = read_frame(cfg["tile_dataset_path"])
+    frame = frame[frame["qc_pass"]].reset_index(drop=True)
+
+    model_family = str(training.get("model_family", "deep_spatial_multitask"))
+    if model_family == "deep_spatial_multitask":
+        result = _train_deep_model(config, frame, checkpoint_dir, report_dir)
+    else:
+        result = _train_classical_model(config, frame, checkpoint_dir, report_dir)
+    summary.update(result)
     return summary

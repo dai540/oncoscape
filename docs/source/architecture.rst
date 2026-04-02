@@ -12,7 +12,7 @@ Package Layout
 - ``reference``: scRNA reference atlas construction
 - ``labels``: teacher-label construction
 - ``preprocessing``: patch extraction and graph creation
-- ``training``: baseline model fitting
+- ``training``: deep multitask model fitting and classical fallbacks
 - ``evaluation``: prediction and rendering
 - ``reporting``: executive / wet-lab / developer reports
 - ``pipeline``: orchestration across all stages
@@ -29,13 +29,14 @@ The documentation and code now align around two execution patterns:
 Current Modeling Strategy
 -------------------------
 
-The repository currently uses an enhanced classical baseline rather than a heavy deep-learning stack as the default execution path.
+The repository now uses a deep spatial multitask model as the default execution path for HPC builds.
 
-This baseline includes:
+The default path includes:
 
-- richer handcrafted tile features
-- validation-driven model selection
-- spatial smoothing during prediction
-- deterministic end-to-end execution on CPU-friendly environments
+- image encoding with a configurable encoder
+- spatial message passing across a slide graph
+- multitask prediction for compartment, composition, and programs
+- validation-based checkpoint selection
+- spatial smoothing during evaluation and rendering
 
-The public interfaces are intentionally stable so stronger backends can replace the baseline without changing the outer pipeline contract.
+An enhanced classical fallback still exists for CPU-only debugging and minimal environments, but the public interfaces are stable so the deep path and fallback share the same outer pipeline contract.

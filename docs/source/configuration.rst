@@ -35,7 +35,7 @@ Important Sections in ``breast_hpc.yaml``
    Defines 112 um tile extraction and patch QC thresholds.
 
 ``training``
-   Defines the current enhanced classical baseline settings.
+   Defines the default ``deep_spatial_multitask`` model, encoder, spatial stack, and smoothing radius.
 
 ``evaluation``
    Controls the target split and report metrics.
@@ -55,3 +55,14 @@ Each full run writes:
 - ``provenance.json`` with git commit and config hash
 
 These files should be archived with every model build.
+
+Recommended Validation
+----------------------
+
+Before launching a large run, execute the regression tests:
+
+.. code-block:: bash
+
+   python -m unittest discover -s tests -v
+
+The deep pipeline test exercises the full register-to-evaluate path on a synthetic dataset and enforces held-out accuracy thresholds.

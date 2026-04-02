@@ -4,7 +4,7 @@ Pipeline Execution
 Fast Path
 ---------
 
-For the shortest path from clone to a baseline end-to-end run:
+For the shortest path from clone to a deep end-to-end run:
 
 .. code-block:: bash
 
@@ -61,6 +61,17 @@ Stage-by-Stage
 .. code-block:: bash
 
    python scripts/07_generate_reports.py --config configs/breast_hpc.yaml
+
+Validation
+----------
+
+Run the regression suite before or after a pipeline change:
+
+.. code-block:: bash
+
+   python -m unittest discover -s tests -v
+
+This includes a synthetic deep pipeline test that asserts strong held-out accuracy on the end-to-end path.
 
 Primary Outputs
 ---------------

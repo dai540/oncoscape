@@ -10,7 +10,17 @@ import pandas as pd
 from PIL import Image, ImageDraw
 
 from oncoscape.core import ensure_directory, read_frame, write_frame, write_json
-from oncoscape.training.trainer import _feature_matrix
+from oncoscape.evaluation.metrics import balanced_accuracy, js_divergence, macro_f1, pearson_mean
+from oncoscape.models import DeepSpatialMultiTaskModel
+from oncoscape.training.trainer import (
+    _feature_matrix,
+    _parse_vector,
+    _predict_centroid_classifier,
+    _predict_linear_classifier,
+    _predict_regression,
+    _prepare_slide_batch,
+    _smooth_compartments,
+)
 
 
 COMPARTMENT_COLORS = {
@@ -23,130 +33,10 @@ COMPARTMENT_COLORS = {
 }
 
 
-def _parse_vector(value: Any) -> np.ndarray:
-    if isinstance(value, np.ndarray):
-        return value.astype(np.float32)
-    if isinstance(value, list):
-        return np.asarray(value, dtype=np.float32)
-    if isinstance(value, str):
-        return np.asarray(ast.literal_eval(value), dtype=np.float32)
-    raise TypeError(f"unsupported vector payload: {type(value)}")
-
-
-def _standardize(x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
-    return (x - mean) / np.clip(std, 1e-6, None)
-
-
-def _macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    labels = sorted(set(map(str, y_true)) | set(map(str, y_pred)))
-    vals = []
-    for label in labels:
-        tp = np.sum((y_true == label) & (y_pred == label))
-        fp = np.sum((y_true != label) & (y_pred == label))
-        fn = np.sum((y_true == label) & (y_pred != label))
-        precision = tp / max(tp + fp, 1)
-        recall = tp / max(tp + fn, 1)
-        vals.append(0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall))
-    return float(np.mean(vals)) if vals else 0.0
-
-
-def _balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    scores = []
-    for label in sorted(pd.Series(y_true).unique()):
-        mask = y_true == label
-        if mask.sum():
-            scores.append(float((y_pred[mask] == label).mean()))
-    return float(np.mean(scores)) if scores else 0.0
-
-
-def _pearson_mean(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    vals = []
-    for idx in range(y_true.shape[1]):
-        a = y_true[:, idx]
-        b = y_pred[:, idx]
-        a_center = a - a.mean()
-        b_center = b - b.mean()
-        denom = float(np.sqrt((a_center * a_center).sum()) * np.sqrt((b_center * b_center).sum()))
-        if denom < 1e-8:
-            vals.append(0.0)
-        else:
-            vals.append(float((a_center * b_center).sum() / denom))
-    return float(np.mean(vals)) if vals else 0.0
-
-
-def _rbf_features(centers: np.ndarray, x: np.ndarray, gamma: float) -> np.ndarray:
-    d2 = ((x[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
-    return np.exp(-gamma * d2).astype(np.float32)
-
-
-def _smooth_composition(coords: np.ndarray, values: np.ndarray, radius: float = 160.0) -> np.ndarray:
-    if len(values) <= 1:
-        return values
-    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
-    neighbors = dist <= radius
-    out = np.zeros_like(values)
-    for i in range(len(values)):
-        out[i] = values[neighbors[i]].mean(axis=0)
-    out = np.clip(out, 0.0, None)
-    return out / np.clip(out.sum(axis=1, keepdims=True), 1e-8, None)
-
-
-def _smooth_programs(coords: np.ndarray, values: np.ndarray, radius: float = 160.0) -> np.ndarray:
-    if len(values) <= 1:
-        return values
-    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
-    neighbors = dist <= radius
-    out = np.zeros_like(values)
-    for i in range(len(values)):
-        out[i] = values[neighbors[i]].mean(axis=0)
-    return out
-
-
-def _smooth_compartments(coords: np.ndarray, labels: np.ndarray, radius: float = 160.0) -> np.ndarray:
-    if len(labels) <= 1:
-        return labels
-    dist = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
-    neighbors = dist <= radius
-    out = []
-    for i in range(len(labels)):
-        vals, counts = np.unique(labels[neighbors[i]], return_counts=True)
-        out.append(vals[counts.argmax()])
-    return np.asarray(out)
-
-
-def _predict_compartment(x: np.ndarray, model_name: str, model: dict[str, Any]) -> np.ndarray:
+def _predict_compartment_classical(x: np.ndarray, model_name: str, model: dict[str, Any]) -> np.ndarray:
     if model_name in {"nearest_centroid", "gaussian_diag"}:
-        labels = []
-        for row in x:
-            scores = []
-            for label in model["classes"]:
-                mu = model["centroids"][label]
-                if model_name == "nearest_centroid":
-                    score = -float(((row - mu) ** 2).sum())
-                else:
-                    var = model["variances"][label]
-                    prior = max(model["priors"][label], 1e-8)
-                    score = -0.5 * float((((row - mu) ** 2) / var).sum() + np.log(var).sum()) + np.log(prior)
-                scores.append(score)
-            labels.append(model["classes"][int(np.argmax(scores))])
-        return np.asarray(labels)
-    scores = x @ model["weights"]
-    idx = scores.argmax(axis=1)
-    return np.asarray([model["classes"][i] for i in idx])
-
-
-def _predict_regression(x: np.ndarray, model: dict[str, Any], task: str) -> np.ndarray:
-    if model["kind"] == "linear":
-        pred = x @ model["weights"]
-    else:
-        pred = _rbf_features(model["centers"], x, model["gamma"]) @ model["weights"]
-    if task == "composition":
-        pred = np.clip(pred, 0.0, None)
-        pred = pred / np.clip(pred.sum(axis=1, keepdims=True), 1e-8, None)
-        pred = _smooth_composition(x[:, -5:-3], pred)
-    else:
-        pred = _smooth_programs(x[:, -5:-3], pred)
-    return pred
+        return _predict_centroid_classifier(x, model, model_name)
+    return _predict_linear_classifier(x, model)
 
 
 def _render_class_map(frame: pd.DataFrame, value_column: str, out_path: Path, tile_px: int) -> None:
@@ -180,6 +70,85 @@ def _render_score_map(frame: pd.DataFrame, score_column: str, out_path: Path, ti
     image.save(out_path)
 
 
+def _evaluate_classical(model: dict[str, Any], eval_frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    raw_x = _feature_matrix(eval_frame)
+    mean = np.asarray(model["feature_mean"], dtype=np.float32)
+    std = np.clip(np.asarray(model["feature_std"], dtype=np.float32), 1e-6, None)
+    x_eval = (raw_x - mean) / std
+    coords = x_eval[:, -5:-3]
+    smoothing_radius = float(model.get("spatial_smoothing_radius_um", 160.0))
+    eval_frame = eval_frame.copy()
+    eval_frame["compartment_pred"] = _smooth_compartments(
+        coords,
+        _predict_compartment_classical(x_eval, model["compartment_model_name"], model["compartment_model"]),
+        radius=smoothing_radius,
+    )
+    composition_pred = _predict_regression(x_eval, model["composition_model"], "composition", smoothing_radius=smoothing_radius)
+    program_pred = _predict_regression(x_eval, model["program_model"], "program", smoothing_radius=smoothing_radius)
+    return _attach_predictions(eval_frame, model, composition_pred, program_pred)
+
+
+def _evaluate_deep(model_payload: dict[str, Any], eval_frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("deep_spatial_multitask evaluation requires torch") from exc
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    smoothing_radius = float(model_payload.get("spatial_smoothing_radius_um", 160.0))
+    model = DeepSpatialMultiTaskModel(model_payload["model_spec"]).to(device)
+    model.load_state_dict(model_payload["state_dict"])
+    model.eval()
+    compartments = model_payload["compartment_classes"]
+    slide_tables = []
+    with torch.no_grad():
+        for _, slide_frame in eval_frame.groupby("slide_id"):
+            batch = _prepare_slide_batch(slide_frame.reset_index(drop=True), compartments, torch, device)
+            outputs = model(batch["patches"], batch["coords"], batch["edge_index"])
+            pred_comp_idx = outputs["compartment_logits"].argmax(dim=1).cpu().numpy()
+            pred_comp = np.asarray([compartments[idx] for idx in pred_comp_idx])
+            pred_comp = _smooth_compartments(batch["coords_np"], pred_comp, radius=smoothing_radius)
+            pred_mix = outputs["composition_logits"].softmax(dim=1).cpu().numpy()
+            pred_prog = outputs["program_values"].cpu().numpy()
+            slide_pred = slide_frame.copy()
+            slide_pred["compartment_pred"] = pred_comp
+            for col_idx, name in enumerate(model_payload["composition_classes"]):
+                slide_pred[f"composition_pred__{name}"] = pred_mix[:, col_idx]
+            for prog_idx, name in enumerate(model_payload["programs"]):
+                slide_pred[f"program_pred__{name}"] = pred_prog[:, prog_idx]
+            slide_tables.append(slide_pred)
+    merged = pd.concat(slide_tables, ignore_index=True) if slide_tables else eval_frame.copy()
+    return _metrics_from_table(merged)
+
+
+def _attach_predictions(eval_frame: pd.DataFrame, model: dict[str, Any], composition_pred: np.ndarray, program_pred: np.ndarray) -> tuple[pd.DataFrame, dict[str, float]]:
+    eval_frame = eval_frame.copy()
+    for col_idx, name in enumerate(model["composition_classes"]):
+        eval_frame[f"composition_pred__{name}"] = composition_pred[:, col_idx]
+    for prog_idx, name in enumerate(model["programs"]):
+        eval_frame[f"program_pred__{name}"] = program_pred[:, prog_idx]
+    return _metrics_from_table(eval_frame)
+
+
+def _metrics_from_table(eval_frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    y_comp = eval_frame["compartment_target"].astype(str).to_numpy()
+    y_mix = np.vstack([_parse_vector(v) for v in eval_frame["composition_target"]])
+    y_prog = np.vstack([_parse_vector(v) for v in eval_frame["program_target"]])
+    composition_cols = [col for col in eval_frame.columns if col.startswith("composition_pred__")]
+    program_cols = [col for col in eval_frame.columns if col.startswith("program_pred__")]
+    pred_mix = eval_frame[composition_cols].to_numpy(dtype=np.float32)
+    pred_prog = eval_frame[program_cols].to_numpy(dtype=np.float32)
+    metrics = {
+        "compartment_macro_f1": macro_f1(y_comp, eval_frame["compartment_pred"].astype(str).to_numpy()),
+        "compartment_balanced_accuracy": balanced_accuracy(y_comp, eval_frame["compartment_pred"].astype(str).to_numpy()),
+        "composition_mean_pearson": pearson_mean(y_mix, pred_mix),
+        "composition_js_divergence": js_divergence(y_mix, pred_mix),
+        "program_mean_pearson": pearson_mean(y_prog, pred_prog),
+        "n_eval_tiles": int(len(eval_frame)),
+    }
+    return eval_frame, metrics
+
+
 def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     render = config["render"]
     predictions_dir = Path(render["predictions_dir"])
@@ -196,7 +165,6 @@ def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[s
 
     ensure_directory(predictions_dir)
     ensure_directory(report_dir)
-
     frame = read_frame(config["train_run"]["tile_dataset_path"])
     target_split = config["evaluation"]["split"]
     eval_frame = frame[frame["split"] == target_split].copy()
@@ -205,59 +173,46 @@ def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[s
     if eval_frame.empty:
         eval_frame = frame.copy()
 
-    with Path(render["checkpoint_path"]).open("rb") as handle:
-        model = pickle.load(handle)
-    raw_x = _feature_matrix(eval_frame)
-    x_eval = _standardize(raw_x, model["feature_mean"], model["feature_std"])
-    coords = x_eval[:, -5:-3]
+    checkpoint_path = Path(render["checkpoint_path"])
+    model_payload = None
+    try:
+        import torch
 
-    eval_frame["compartment_pred"] = _smooth_compartments(
-        coords,
-        _predict_compartment(x_eval, model["compartment_model_name"], model["compartment_model"]),
-    )
-    composition_pred = _predict_regression(x_eval, model["composition_model"], "composition")
-    program_pred = _predict_regression(x_eval, model["program_model"], "program")
+        model_payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except Exception:
+        with checkpoint_path.open("rb") as handle:
+            model_payload = pickle.load(handle)
 
-    y_comp = eval_frame["compartment_target"].astype(str).to_numpy()
-    y_mix = np.vstack([_parse_vector(v) for v in eval_frame["composition_target"]])
-    y_prog = np.vstack([_parse_vector(v) for v in eval_frame["program_target"]])
-    metrics = {
-        "compartment_macro_f1": _macro_f1(y_comp, eval_frame["compartment_pred"].to_numpy()),
-        "compartment_balanced_accuracy": _balanced_accuracy(y_comp, eval_frame["compartment_pred"].to_numpy()),
-        "composition_mean_pearson": _pearson_mean(y_mix, composition_pred),
-        "program_mean_pearson": _pearson_mean(y_prog, program_pred),
-        "n_eval_tiles": int(len(eval_frame)),
-    }
+    model_family = model_payload.get("model_family", "enhanced_classical_ensemble")
+    if model_family == "deep_spatial_multitask":
+        eval_table, metrics = _evaluate_deep(model_payload, eval_frame)
+    else:
+        eval_table, metrics = _evaluate_classical(model_payload, eval_frame)
+
     write_json(report_dir / "test_metrics.json", metrics)
-
     per_slide_rows = []
     tile_px = int(render.get("render_tile_px", 24))
-    for slide_id, slide_frame in eval_frame.groupby("slide_id"):
+    composition_names = model_payload["composition_classes"]
+    program_names = model_payload["programs"]
+    for slide_id, slide_frame in eval_table.groupby("slide_id"):
         slide_dir = ensure_directory(predictions_dir / str(slide_id))
-        row_positions = eval_frame.index.get_indexer(slide_frame.index)
-        slide_table = slide_frame.copy()
-        for col_idx, name in enumerate(model["composition_classes"]):
-            slide_table[f"composition_pred__{name}"] = composition_pred[row_positions, col_idx]
-        for prog_idx, name in enumerate(model["programs"]):
-            slide_table[f"program_pred__{name}"] = program_pred[row_positions, prog_idx]
-        write_frame(slide_table, slide_dir / "tile_predictions.parquet")
-        _render_class_map(slide_table, "compartment_pred", slide_dir / "compartment_map.png", tile_px)
+        write_frame(slide_frame, slide_dir / "tile_predictions.parquet")
+        _render_class_map(slide_frame, "compartment_pred", slide_dir / "compartment_map.png", tile_px)
         composition_dir = ensure_directory(slide_dir / "composition_maps")
-        for name in model["composition_classes"]:
-            _render_score_map(slide_table, f"composition_pred__{name}", composition_dir / f"{name}.png", tile_px)
+        for name in composition_names:
+            _render_score_map(slide_frame, f"composition_pred__{name}", composition_dir / f"{name}.png", tile_px)
         program_dir = ensure_directory(slide_dir / "program_maps")
-        for name in model["programs"]:
-            _render_score_map(slide_table, f"program_pred__{name}", program_dir / f"{name}.png", tile_px)
+        for name in program_names:
+            _render_score_map(slide_frame, f"program_pred__{name}", program_dir / f"{name}.png", tile_px)
         per_slide_rows.append(
             {
                 "slide_id": slide_id,
                 "n_tiles": int(len(slide_frame)),
-                "compartment_macro_f1": _macro_f1(
-                    slide_table["compartment_target"].astype(str).to_numpy(),
-                    slide_table["compartment_pred"].astype(str).to_numpy(),
+                "compartment_macro_f1": macro_f1(
+                    slide_frame["compartment_target"].astype(str).to_numpy(),
+                    slide_frame["compartment_pred"].astype(str).to_numpy(),
                 ),
             }
         )
-
     pd.DataFrame(per_slide_rows).to_csv(report_dir / "per_slide_metrics.csv", index=False)
-    return summary | metrics
+    return summary | metrics | {"model_family": model_family}
