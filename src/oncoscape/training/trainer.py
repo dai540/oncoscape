@@ -336,6 +336,9 @@ def _prepare_slide_batch(frame: pd.DataFrame, compartments: list[str], torch_mod
         "compartment_target": compartment_target,
         "composition_target": composition_target,
         "program_target": program_target,
+        "compartment_mask": torch_module.tensor(frame["teacher_mask_compartment"].to_numpy(dtype=np.float32), device=device),
+        "composition_mask": torch_module.tensor(frame["teacher_mask_composition"].to_numpy(dtype=np.float32), device=device),
+        "program_mask": torch_module.tensor(frame["teacher_mask_program"].to_numpy(dtype=np.float32), device=device),
         "compartment_weight": torch_module.tensor(frame["teacher_confidence_compartment"].to_numpy(dtype=np.float32), device=device),
         "composition_weight": torch_module.tensor(frame["teacher_confidence_composition"].to_numpy(dtype=np.float32), device=device),
         "program_weight": torch_module.tensor(frame["teacher_confidence_program"].to_numpy(dtype=np.float32), device=device),
@@ -346,8 +349,10 @@ def _prepare_slide_batch(frame: pd.DataFrame, compartments: list[str], torch_mod
 def _deep_losses(outputs: dict[str, Any], batch: dict[str, Any], weights: dict[str, float], torch_module) -> tuple[Any, dict[str, float]]:
     import torch.nn.functional as F  # type: ignore
 
-    comp_loss = F.cross_entropy(outputs["compartment_logits"], batch["compartment_target"], reduction="none")
-    comp_loss = (comp_loss * batch["compartment_weight"]).mean()
+    comp_weight = batch["compartment_weight"] * batch["compartment_mask"]
+    comp_loss_raw = F.cross_entropy(outputs["compartment_logits"], batch["compartment_target"], reduction="none")
+    comp_denom = comp_weight.sum().clamp_min(1e-8)
+    comp_loss = (comp_loss_raw * comp_weight).sum() / comp_denom
 
     pred_comp = outputs["composition_logits"].softmax(dim=1).clamp_min(1e-8)
     true_comp = batch["composition_target"].clamp_min(1e-8)
@@ -357,10 +362,12 @@ def _deep_losses(outputs: dict[str, Any], batch: dict[str, Any], weights: dict[s
         (true_comp * (true_comp.log() - mean.log())).sum(dim=1)
         + (pred_comp * (pred_comp.log() - mean.log())).sum(dim=1)
     )
-    composition_loss = (js * batch["composition_weight"]).mean()
+    composition_weight = batch["composition_weight"] * batch["composition_mask"]
+    composition_loss = (js * composition_weight).sum() / composition_weight.sum().clamp_min(1e-8)
 
     huber = F.huber_loss(outputs["program_values"], batch["program_target"], reduction="none")
-    program_loss = (huber.mean(dim=1) * batch["program_weight"]).mean()
+    program_weight = batch["program_weight"] * batch["program_mask"]
+    program_loss = (huber.mean(dim=1) * program_weight).sum() / program_weight.sum().clamp_min(1e-8)
 
     if outputs["latent"].shape[0] > 1 and batch["edge_index"].numel() > 0:
         src, dst = batch["edge_index"]
@@ -400,17 +407,23 @@ def _evaluate_deep(model, slide_batches: list[dict[str, Any]], tasks: dict[str, 
             true_comp = batch["compartment_target"].cpu().numpy()
             true_mix = batch["composition_target"].cpu().numpy()
             true_prog = batch["program_target"].cpu().numpy()
-            comp_true.append(true_comp)
-            comp_pred.append(pred_comp)
-            mix_true.append(true_mix)
-            mix_pred.append(pred_mix)
-            prog_true.append(true_prog)
-            prog_pred.append(pred_prog)
+            comp_mask = batch["compartment_mask"].cpu().numpy() > 0
+            mix_mask = batch["composition_mask"].cpu().numpy() > 0
+            prog_mask = batch["program_mask"].cpu().numpy() > 0
+            if comp_mask.any():
+                comp_true.append(true_comp[comp_mask])
+                comp_pred.append(pred_comp[comp_mask])
+            if mix_mask.any():
+                mix_true.append(true_mix[mix_mask])
+                mix_pred.append(pred_mix[mix_mask])
+            if prog_mask.any():
+                prog_true.append(true_prog[prog_mask])
+                prog_pred.append(pred_prog[prog_mask])
             per_slide.append(
                 {
                     "slide_id": batch["slide_id"],
                     "n_tiles": int(len(true_comp)),
-                    "compartment_macro_f1": macro_f1(true_comp, pred_comp),
+                    "compartment_macro_f1": macro_f1(true_comp[comp_mask], pred_comp[comp_mask]) if comp_mask.any() else 0.0,
                 }
             )
     comp_true_all = np.concatenate(comp_true) if comp_true else np.asarray([])
@@ -530,24 +543,41 @@ def _train_classical_model(config: dict[str, Any], frame: pd.DataFrame, checkpoi
     y_mix_val = np.vstack([_parse_vector(v) for v in val_frame["composition_target"]])
     y_prog_train = np.vstack([_parse_vector(v) for v in train_frame["program_target"]])
     y_prog_val = np.vstack([_parse_vector(v) for v in val_frame["program_target"]])
+    comp_mask_train = train_frame["teacher_mask_compartment"].to_numpy(dtype=np.float32) > 0
+    comp_mask_val = val_frame["teacher_mask_compartment"].to_numpy(dtype=np.float32) > 0
+    mix_mask_train = train_frame["teacher_mask_composition"].to_numpy(dtype=np.float32) > 0
+    mix_mask_val = val_frame["teacher_mask_composition"].to_numpy(dtype=np.float32) > 0
+    prog_mask_train = train_frame["teacher_mask_program"].to_numpy(dtype=np.float32) > 0
+    prog_mask_val = val_frame["teacher_mask_program"].to_numpy(dtype=np.float32) > 0
     smoothing_radius = float(config["training"].get("spatial_smoothing_radius_um", 160.0))
 
-    best_compartment, comp_metrics = _select_compartment_model(x_train, y_comp_train, x_val, y_comp_val, smoothing_radius)
+    if comp_mask_train.any() and comp_mask_val.any():
+        best_compartment, comp_metrics = _select_compartment_model(
+            x_train[comp_mask_train],
+            y_comp_train[comp_mask_train],
+            x_val[comp_mask_val],
+            y_comp_val[comp_mask_val],
+            smoothing_radius,
+        )
+    else:
+        default_label = str(y_comp_train[0]) if len(y_comp_train) else config["tasks"]["compartment_classes"][0]
+        best_compartment = {"name": "constant", "model": {"constant": default_label}}
+        comp_metrics = {"macro_f1": 0.0, "balanced_accuracy": 0.0}
     best_composition, compo_score = _select_regression_model(
-        x_train,
-        y_mix_train,
-        train_frame["teacher_confidence_composition"].to_numpy(dtype=np.float32),
-        x_val,
-        y_mix_val,
+        x_train[mix_mask_train],
+        y_mix_train[mix_mask_train],
+        train_frame.loc[mix_mask_train, "teacher_confidence_composition"].to_numpy(dtype=np.float32),
+        x_val[mix_mask_val],
+        y_mix_val[mix_mask_val],
         "composition",
         smoothing_radius,
     )
     best_program, prog_score = _select_regression_model(
-        x_train,
-        y_prog_train,
-        train_frame["teacher_confidence_program"].to_numpy(dtype=np.float32),
-        x_val,
-        y_prog_val,
+        x_train[prog_mask_train],
+        y_prog_train[prog_mask_train],
+        train_frame.loc[prog_mask_train, "teacher_confidence_program"].to_numpy(dtype=np.float32),
+        x_val[prog_mask_val],
+        y_prog_val[prog_mask_val],
         "program",
         smoothing_radius,
     )
@@ -559,7 +589,11 @@ def _train_classical_model(config: dict[str, Any], frame: pd.DataFrame, checkpoi
             x_val[:, -5:-3],
             _predict_centroid_classifier(x_val, best_compartment["model"], "gaussian_diag")
             if best_compartment["name"] == "gaussian_diag"
-            else _predict_linear_classifier(x_val, best_compartment["model"]),
+            else (
+                np.asarray([best_compartment["model"]["constant"]] * len(x_val))
+                if best_compartment["name"] == "constant"
+                else _predict_linear_classifier(x_val, best_compartment["model"])
+            ),
             radius=smoothing_radius,
         )
     )
@@ -567,11 +601,11 @@ def _train_classical_model(config: dict[str, Any], frame: pd.DataFrame, checkpoi
     prog_val_pred = _predict_regression(x_val, best_program["model"], "program", smoothing_radius=smoothing_radius)
 
     val_metrics = {
-        "macro_f1": macro_f1(y_comp_val, comp_val_pred),
-        "balanced_accuracy": balanced_accuracy(y_comp_val, comp_val_pred),
-        "composition_mean_pearson": pearson_mean(y_mix_val, mix_val_pred),
-        "composition_js_divergence": js_divergence(y_mix_val, mix_val_pred),
-        "program_mean_pearson": pearson_mean(y_prog_val, prog_val_pred),
+        "macro_f1": macro_f1(y_comp_val[comp_mask_val], comp_val_pred[comp_mask_val]) if comp_mask_val.any() else 0.0,
+        "balanced_accuracy": balanced_accuracy(y_comp_val[comp_mask_val], comp_val_pred[comp_mask_val]) if comp_mask_val.any() else 0.0,
+        "composition_mean_pearson": pearson_mean(y_mix_val[mix_mask_val], mix_val_pred[mix_mask_val]) if mix_mask_val.any() else 0.0,
+        "composition_js_divergence": js_divergence(y_mix_val[mix_mask_val], mix_val_pred[mix_mask_val]) if mix_mask_val.any() else 0.0,
+        "program_mean_pearson": pearson_mean(y_prog_val[prog_mask_val], prog_val_pred[prog_mask_val]) if prog_mask_val.any() else 0.0,
     }
     model_payload = {
         "model_family": "enhanced_classical_ensemble",

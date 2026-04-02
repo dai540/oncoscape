@@ -134,17 +134,23 @@ def _metrics_from_table(eval_frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[st
     y_comp = eval_frame["compartment_target"].astype(str).to_numpy()
     y_mix = np.vstack([_parse_vector(v) for v in eval_frame["composition_target"]])
     y_prog = np.vstack([_parse_vector(v) for v in eval_frame["program_target"]])
+    comp_mask = eval_frame.get("teacher_mask_compartment", pd.Series(np.ones(len(eval_frame), dtype=int))).to_numpy(dtype=np.float32) > 0
+    mix_mask = eval_frame.get("teacher_mask_composition", pd.Series(np.ones(len(eval_frame), dtype=int))).to_numpy(dtype=np.float32) > 0
+    prog_mask = eval_frame.get("teacher_mask_program", pd.Series(np.ones(len(eval_frame), dtype=int))).to_numpy(dtype=np.float32) > 0
     composition_cols = [col for col in eval_frame.columns if col.startswith("composition_pred__")]
     program_cols = [col for col in eval_frame.columns if col.startswith("program_pred__")]
     pred_mix = eval_frame[composition_cols].to_numpy(dtype=np.float32)
     pred_prog = eval_frame[program_cols].to_numpy(dtype=np.float32)
     metrics = {
-        "compartment_macro_f1": macro_f1(y_comp, eval_frame["compartment_pred"].astype(str).to_numpy()),
-        "compartment_balanced_accuracy": balanced_accuracy(y_comp, eval_frame["compartment_pred"].astype(str).to_numpy()),
-        "composition_mean_pearson": pearson_mean(y_mix, pred_mix),
-        "composition_js_divergence": js_divergence(y_mix, pred_mix),
-        "program_mean_pearson": pearson_mean(y_prog, pred_prog),
+        "compartment_macro_f1": macro_f1(y_comp[comp_mask], eval_frame["compartment_pred"].astype(str).to_numpy()[comp_mask]) if comp_mask.any() else 0.0,
+        "compartment_balanced_accuracy": balanced_accuracy(y_comp[comp_mask], eval_frame["compartment_pred"].astype(str).to_numpy()[comp_mask]) if comp_mask.any() else 0.0,
+        "composition_mean_pearson": pearson_mean(y_mix[mix_mask], pred_mix[mix_mask]) if mix_mask.any() else 0.0,
+        "composition_js_divergence": js_divergence(y_mix[mix_mask], pred_mix[mix_mask]) if mix_mask.any() else 0.0,
+        "program_mean_pearson": pearson_mean(y_prog[prog_mask], pred_prog[prog_mask]) if prog_mask.any() else 0.0,
         "n_eval_tiles": int(len(eval_frame)),
+        "n_compartment_eval_tiles": int(comp_mask.sum()),
+        "n_composition_eval_tiles": int(mix_mask.sum()),
+        "n_program_eval_tiles": int(prog_mask.sum()),
     }
     return eval_frame, metrics
 
@@ -208,9 +214,13 @@ def evaluate_and_render(config: dict[str, Any], dry_run: bool = False) -> dict[s
             {
                 "slide_id": slide_id,
                 "n_tiles": int(len(slide_frame)),
-                "compartment_macro_f1": macro_f1(
-                    slide_frame["compartment_target"].astype(str).to_numpy(),
-                    slide_frame["compartment_pred"].astype(str).to_numpy(),
+                "compartment_macro_f1": (
+                    macro_f1(
+                        slide_frame.loc[slide_frame["teacher_mask_compartment"] > 0, "compartment_target"].astype(str).to_numpy(),
+                        slide_frame.loc[slide_frame["teacher_mask_compartment"] > 0, "compartment_pred"].astype(str).to_numpy(),
+                    )
+                    if (slide_frame["teacher_mask_compartment"] > 0).any()
+                    else 0.0
                 ),
             }
         )

@@ -41,6 +41,22 @@ def _load_reference_inputs(paths: list[str], max_obs_per_input: int) -> list[ad.
     return adatas
 
 
+def _resolve_reference_input_paths(config: dict[str, Any]) -> list[str]:
+    ref = config["reference"]
+    explicit = [str(path) for path in ref.get("input_h5ad_paths", []) if str(path).strip()]
+    if explicit:
+        return explicit
+    slides_csv_path = ref.get("slides_csv_path") or config.get("registration", {}).get("slides_csv_path") or str(
+        Path(config["registration"]["output_dir"]) / "slides.csv"
+    )
+    slides_csv = Path(slides_csv_path)
+    if not slides_csv.exists():
+        return []
+    slides = pd.read_csv(slides_csv)
+    scrna = slides[slides["source_type"] == "scrna"].copy()
+    return [str(path) for path in scrna["adata_path"].dropna().astype(str).tolist()]
+
+
 def _intersect_and_concat(adatas: list[ad.AnnData]) -> ad.AnnData:
     if not adatas:
         raise ValueError("no readable scRNA inputs found for reference atlas")
@@ -86,17 +102,18 @@ def _marker_score_labels(adata: ad.AnnData, broad_cell_types: list[str]) -> list
 
 def build_reference_atlas(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     ref = config["reference"]
+    input_paths = _resolve_reference_input_paths(config)
     outputs = {
         "output_h5ad_path": str(Path(ref["output_h5ad_path"]).resolve()),
         "output_markers_path": str(Path(ref["output_markers_path"]).resolve()),
         "output_qc_report_path": str(Path(ref["output_qc_report_path"]).resolve()),
-        "num_inputs": int(len(ref.get("input_h5ad_paths", []))),
+        "num_inputs": int(len(input_paths)),
         "dry_run": dry_run,
     }
     if dry_run:
         return outputs
 
-    adatas = _load_reference_inputs(ref.get("input_h5ad_paths", []), int(ref.get("max_obs_per_input", 50000)))
+    adatas = _load_reference_inputs(input_paths, int(ref.get("max_obs_per_input", 50000)))
     merged = _intersect_and_concat(adatas)
     merged.obs_names_make_unique()
     label_column = _resolve_label_column(merged.obs, list(ref.get("label_candidates", [])))

@@ -18,11 +18,26 @@ conda env create -f environment.yml
 conda activate oncoscape
 pip install -e .
 pip install sphinx
+python scripts/00_fetch_public_data.py --config configs/breast_hpc.yaml
+python scripts/00_make_public_breast_manifest.py --config configs/breast_hpc.yaml
 python scripts/00_preflight.py --config configs/breast_hpc.yaml
 python scripts/08_run_pipeline.py --config configs/breast_hpc.yaml
 ```
 
 The default HPC config now targets the `deep_spatial_multitask` training path.
+
+For public breast runs, the intended order is:
+
+1. fetch the public datasets defined in `configs/breast_downloads.template.yaml`
+2. assemble a source manifest from the downloaded directory layout
+3. run preflight and the full pipeline
+
+The real-data ingestion path now supports:
+
+- 10x Visium HDF5 matrices
+- 10x / GEO sparse matrix directories
+- Visium `spatial/` folders with `tissue_positions*.csv`
+- Wu/GEO-style scRNA raw sample directories
 
 ## Validate The Pipeline
 

@@ -10,6 +10,8 @@ outputs/
 demo_data/
 tmp_*
 tmp_*/
+!src/oncoscape/data/
+!src/oncoscape/data/*.py
 docs/_build/
 docs/_autosummary/
 

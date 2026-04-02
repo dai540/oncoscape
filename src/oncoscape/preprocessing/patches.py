@@ -12,16 +12,23 @@ from PIL import Image
 from oncoscape.core import ensure_directory, write_frame, write_json
 
 
-def _crop_patch(image: Image.Image, x_um: float, y_um: float, patch_size_px: int, target_mpp: float) -> Image.Image:
-    cx = int(round(x_um / target_mpp))
-    cy = int(round(y_um / target_mpp))
-    half = patch_size_px // 2
-    box = (cx - half, cy - half, cx + half, cy + half)
+def _crop_patch(
+    image: Image.Image,
+    x_um: float,
+    y_um: float,
+    tile_size_um: float,
+    patch_size_px: int,
+    source_mpp_x: float,
+    source_mpp_y: float,
+) -> Image.Image:
+    cx = int(round(x_um / max(source_mpp_x, 1e-6)))
+    cy = int(round(y_um / max(source_mpp_y, 1e-6)))
+    half_w = max(1, int(round((tile_size_um / max(source_mpp_x, 1e-6)) / 2.0)))
+    half_h = max(1, int(round((tile_size_um / max(source_mpp_y, 1e-6)) / 2.0)))
+    box = (cx - half_w, cy - half_h, cx + half_w, cy + half_h)
     cropped = image.crop(box)
     if cropped.size != (patch_size_px, patch_size_px):
-        canvas = Image.new("RGB", (patch_size_px, patch_size_px), color=(255, 255, 255))
-        canvas.paste(cropped, (0, 0))
-        return canvas
+        cropped = cropped.resize((patch_size_px, patch_size_px), Image.BILINEAR)
     return cropped
 
 
@@ -41,9 +48,17 @@ def _knn_edges(coords: np.ndarray, k: int) -> np.ndarray:
     return np.vstack([src, dst]).astype(np.int64)
 
 
+def _subsample_frame(frame: pd.DataFrame, max_tiles: int | None) -> pd.DataFrame:
+    if max_tiles is None or max_tiles <= 0 or len(frame) <= max_tiles:
+        return frame.reset_index(drop=True)
+    idx = np.linspace(0, len(frame) - 1, max_tiles, dtype=int)
+    return frame.iloc[idx].reset_index(drop=True)
+
+
 def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     cfg = config["patch_extraction"]
     slides = pd.read_csv(cfg["slides_csv_path"])
+    slides = slides[slides["source_type"].isin(["visium", "xenium"]) & slides["image_path"].fillna("").ne("")].reset_index(drop=True)
     teachers = ad.read_h5ad(cfg["teacher_labels_path"])
     patches_dir = Path(cfg["patches_dir"])
     graphs_dir = Path(cfg["graphs_dir"])
@@ -64,9 +79,12 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
     patch_rows: list[dict[str, Any]] = []
     patch_size_px = int(cfg["patch_size_px"])
     target_mpp = float(cfg["target_mpp"])
+    tile_size_um = float(cfg.get("tile_size_um", patch_size_px * target_mpp))
     graph_k = int(config["graph"]["k"])
+    max_tiles_per_slide = cfg.get("max_tiles_per_slide")
+    max_tiles_per_slide = int(max_tiles_per_slide) if max_tiles_per_slide not in (None, "") else None
 
-    teacher_obs = teachers.obs.copy()
+    teacher_obs = teachers.obs.copy().reset_index(drop=True)
     composition = pd.DataFrame(
         teachers.obsm["composition"],
         columns=config["tasks"]["composition_classes"],
@@ -82,6 +100,7 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
         slide_tiles = teacher_obs[teacher_obs["slide_id"] == slide["slide_id"]].copy()
         if slide_tiles.empty:
             continue
+        slide_tiles = _subsample_frame(slide_tiles, max_tiles_per_slide)
         image = Image.open(slide["image_path"]).convert("RGB")
         slide_patch_dir = ensure_directory(patches_dir / slide["slide_id"])
         coords = slide_tiles[["x_um", "y_um"]].to_numpy(dtype=float)
@@ -89,8 +108,16 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
         with Path(graphs_dir / f"{slide['slide_id']}.pt").open("wb") as handle:
             pickle.dump({"edge_index": edge_index, "coords_um": coords}, handle)
 
-        for idx, (_, tile) in enumerate(slide_tiles.iterrows()):
-            patch = _crop_patch(image, float(tile["x_um"]), float(tile["y_um"]), patch_size_px, target_mpp)
+        for row_id, tile in slide_tiles.iterrows():
+            patch = _crop_patch(
+                image,
+                float(tile["x_um"]),
+                float(tile["y_um"]),
+                tile_size_um=tile_size_um,
+                patch_size_px=patch_size_px,
+                source_mpp_x=float(slide.get("mpp_x", target_mpp) or target_mpp),
+                source_mpp_y=float(slide.get("mpp_y", target_mpp) or target_mpp),
+            )
             patch_array = np.asarray(patch, dtype=np.uint8)
             tissue_fraction = _tissue_fraction(patch_array)
             patch_mean = float(patch_array.mean() / 255.0)
@@ -102,8 +129,8 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
             )
             patch_path = slide_patch_dir / f"{tile['tile_id']}.png"
             patch.save(patch_path)
-            comp = composition.loc[slide_tiles.index[idx]].to_numpy(dtype=np.float32)
-            prog = programs.loc[slide_tiles.index[idx]].to_numpy(dtype=np.float32)
+            comp = composition.loc[row_id].to_numpy(dtype=np.float32)
+            prog = programs.loc[row_id].to_numpy(dtype=np.float32)
             patch_rows.append(
                 {
                     "tile_id": tile["tile_id"],
@@ -124,6 +151,9 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
                     "teacher_confidence_compartment": float(tile["teacher_confidence_compartment"]),
                     "teacher_confidence_composition": float(tile["teacher_confidence_composition"]),
                     "teacher_confidence_program": float(tile["teacher_confidence_program"]),
+                    "teacher_source_compartment": str(tile.get("teacher_source_compartment", "")),
+                    "teacher_source_composition": str(tile.get("teacher_source_composition", "")),
+                    "teacher_source_program": str(tile.get("teacher_source_program", "")),
                     "tissue_fraction": tissue_fraction,
                     "patch_mean": patch_mean,
                     "patch_std": patch_std,

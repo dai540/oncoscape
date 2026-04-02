@@ -117,6 +117,7 @@ def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, A
     teachers = config["teachers"]
     tasks = config["tasks"]
     slides = pd.read_csv(teachers["slides_csv_path"])
+    slides = slides[slides["source_type"].isin(["visium", "xenium"])].reset_index(drop=True)
     outputs = {
         "output_h5ad_path": str(Path(teachers["output_h5ad_path"]).resolve()),
         "output_ontology_json": str(Path(teachers["output_ontology_json"]).resolve()),
@@ -138,6 +139,10 @@ def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, A
     for row in slides.to_dict(orient="records"):
         adata = ad.read_h5ad(row["adata_path"])
         source_name = row.get("source", row.get("name", row["slide_id"]))
+        has_pathology = bool(
+            row["source_type"] == "visium"
+            and teachers.get("visium_compartment_annotation_column", "Classification") in adata.obs.columns
+        )
         compartment = _infer_compartment(
             adata.obs,
             tasks["compartment_classes"],
@@ -148,21 +153,21 @@ def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, A
                 "slide_id": row["slide_id"],
                 "patient_id": row["patient_id"],
                 "source": source_name,
+                "source_type": row["source_type"],
                 "platform": row["platform"],
                 "tile_id": [f"{row['slide_id']}__tile_{idx:06d}" for idx in range(adata.n_obs)],
                 "x_um": adata.obs.get("x_um", pd.Series(np.arange(adata.n_obs) * 112.0)).astype(float).to_numpy(),
                 "y_um": adata.obs.get("y_um", pd.Series(np.zeros(adata.n_obs))).astype(float).to_numpy(),
                 "compartment": compartment.to_numpy(),
-                "teacher_mask_compartment": 1,
+                "teacher_mask_compartment": int(has_pathology),
                 "teacher_mask_composition": 1,
                 "teacher_mask_program": 1,
-                "teacher_confidence_compartment": (
-                    teachers["teacher_confidence"]["pathology"]
-                    if row["source_type"] == "visium" and teachers.get("visium_compartment_annotation_column", "Classification") in adata.obs.columns
-                    else teachers["teacher_confidence"]["fallback"]
-                ),
+                "teacher_confidence_compartment": teachers["teacher_confidence"]["pathology"] if has_pathology else 0.0,
                 "teacher_confidence_composition": teachers["teacher_confidence"]["xenium"] if row["source_type"] == "xenium" else teachers["teacher_confidence"]["visium"],
                 "teacher_confidence_program": teachers["teacher_confidence"]["fallback"],
+                "teacher_source_compartment": "pathology" if has_pathology else "unlabeled",
+                "teacher_source_composition": "xenium" if row["source_type"] == "xenium" else "signature_scoring",
+                "teacher_source_program": teachers.get("program_method", "gene_set_mean"),
             }
         )
         obs_rows.append(coords)
