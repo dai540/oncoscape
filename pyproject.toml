@@ -9,15 +9,16 @@ description = "HPC-first public-data pipeline for H&E-to-spatial-biology modelin
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "anndata",
+  "anndata>=0.12,<0.13",
   "h5py",
-  "numpy",
+  "numpy<2",
   "pandas",
   "Pillow",
   "pyarrow",
   "PyYAML",
   "scipy",
   "torch",
+  "zarr<3",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ oncoscape-train-breast = "oncoscape.cli.train_breast:main"
 oncoscape-eval-render = "oncoscape.cli.eval_render:main"
 oncoscape-report = "oncoscape.cli.report:main"
 oncoscape-run = "oncoscape.cli.run_pipeline:main"
+oncoscape-select-seed = "oncoscape.cli.select_seed:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -34,6 +34,8 @@ COMPARTMENT_COLORS = {
 
 
 def _predict_compartment_classical(x: np.ndarray, model_name: str, model: dict[str, Any]) -> np.ndarray:
+    if model_name == "constant":
+        return np.asarray([str(model["constant"])] * len(x))
     if model_name in {"nearest_centroid", "gaussian_diag"}:
         return _predict_centroid_classifier(x, model, model_name)
     return _predict_linear_classifier(x, model)

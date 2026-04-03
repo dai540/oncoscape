@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import pickle
+import random
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,21 @@ from PIL import Image
 from oncoscape.core import ensure_directory, read_frame, write_json
 from oncoscape.evaluation.metrics import balanced_accuracy, js_divergence, macro_f1, pearson_mean
 from oncoscape.models import DeepSpatialMultiTaskModel, build_model_spec
+
+
+def _set_runtime_seed(seed: int) -> None:
+    np.random.seed(seed)
+    random.seed(seed)
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        if hasattr(torch, "use_deterministic_algorithms"):
+            torch.use_deterministic_algorithms(False)
+    except Exception:
+        pass
 
 
 def _parse_vector(value: Any) -> np.ndarray:
@@ -300,6 +316,17 @@ def _load_graph(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return edge_index, coords
 
 
+def _knn_edges_from_coords(coords: np.ndarray, k: int) -> np.ndarray:
+    if len(coords) <= 1:
+        return np.zeros((2, 0), dtype=np.int64)
+    distances = np.sqrt(((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=2))
+    np.fill_diagonal(distances, np.inf)
+    neighbors = np.argsort(distances, axis=1)[:, : min(k, len(coords) - 1)]
+    src = np.repeat(np.arange(len(coords)), neighbors.shape[1])
+    dst = neighbors.reshape(-1)
+    return np.vstack([src, dst]).astype(np.int64)
+
+
 def _load_patch_tensor(path: str | Path, torch_module) -> Any:
     image = Image.open(path).convert("RGB")
     arr = np.asarray(image, dtype=np.float32) / 255.0
@@ -309,8 +336,16 @@ def _load_patch_tensor(path: str | Path, torch_module) -> Any:
 def _prepare_slide_batch(frame: pd.DataFrame, compartments: list[str], torch_module, device: str) -> dict[str, Any]:
     graph_path = frame["graph_path"].iloc[0]
     edge_index_np, coords_np = _load_graph(graph_path)
+    frame_coords_np = frame[["x_um", "y_um"]].to_numpy(dtype=np.float32)
+    if len(coords_np) != len(frame_coords_np) or (edge_index_np.size and int(edge_index_np.max()) >= len(frame_coords_np)):
+        inferred_k = int(round(edge_index_np.shape[1] / max(len(coords_np), 1))) if edge_index_np.size else 8
+        inferred_k = max(inferred_k, 1)
+        coords_np = frame_coords_np
+        edge_index_np = _knn_edges_from_coords(coords_np, inferred_k)
+    else:
+        coords_np = frame_coords_np
     patches = torch_module.stack([_load_patch_tensor(path, torch_module) for path in frame["patch_path"].tolist()]).to(device)
-    coords = torch_module.tensor(frame[["x_um", "y_um"]].to_numpy(dtype=np.float32), device=device)
+    coords = torch_module.tensor(coords_np, device=device)
     edge_index = torch_module.tensor(edge_index_np, dtype=torch_module.long, device=device)
     comp_lookup = {label: idx for idx, label in enumerate(compartments)}
     compartment_target = torch_module.tensor(
@@ -653,6 +688,7 @@ def _train_classical_model(config: dict[str, Any], frame: pd.DataFrame, checkpoi
 def train_breast_model(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     cfg = config["train_run"]
     training = config["training"]
+    _set_runtime_seed(int(config.get("runtime", {}).get("seed", 17)))
     checkpoint_dir = Path(cfg["checkpoint_dir"])
     report_dir = Path(cfg["report_dir"])
     summary = {

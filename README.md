@@ -22,9 +22,14 @@ python scripts/00_fetch_public_data.py --config configs/breast_hpc.yaml
 python scripts/00_make_public_breast_manifest.py --config configs/breast_hpc.yaml
 python scripts/00_preflight.py --config configs/breast_hpc.yaml
 python scripts/08_run_pipeline.py --config configs/breast_hpc.yaml
+python scripts/09_select_best_seed.py --config configs/breast_hpc.yaml
 ```
 
 The default HPC config now targets the `deep_spatial_multitask` training path.
+
+For strict holdout experiments, run multiple seeds into a shared `outputs/seed_sweep/` root, then use
+`09_select_best_seed.py` to choose the canonical model by validation score and promote its checkpoints,
+reports, and predictions into the standard output locations.
 
 For public breast runs, the intended order is:
 

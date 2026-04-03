@@ -8,14 +8,15 @@ dependencies:
   - pytorch>=2.2
   - torchvision
   - pandas
-  - numpy
+  - numpy<2
   - scipy
   - pyarrow
   - pyyaml
-  - anndata
+  - anndata>=0.12,<0.13
   - h5py
   - pillow
   - sphinx
+  - zarr<3
   - pip:
       - timm
       - openslide-python

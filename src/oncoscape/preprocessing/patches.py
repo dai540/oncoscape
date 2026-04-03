@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,32 @@ def _subsample_frame(frame: pd.DataFrame, max_tiles: int | None) -> pd.DataFrame
     return frame.iloc[idx].reset_index(drop=True)
 
 
+def _resolve_effective_mpp(slide: dict[str, Any], target_mpp: float) -> tuple[float, float]:
+    base_mpp_x = float(slide.get("mpp_x", target_mpp) or target_mpp)
+    base_mpp_y = float(slide.get("mpp_y", target_mpp) or target_mpp)
+    coord_path = Path(str(slide.get("coord_path", ""))) if str(slide.get("coord_path", "")).strip() else None
+    image_name = Path(str(slide.get("image_path", ""))).name.lower()
+    if coord_path is None or not coord_path.exists() or not coord_path.is_dir():
+        return base_mpp_x, base_mpp_y
+    scale_path = coord_path / "scalefactors_json.json"
+    if not scale_path.exists():
+        return base_mpp_x, base_mpp_y
+    try:
+        with scale_path.open("r", encoding="utf-8") as handle:
+            scalefactors = json.load(handle)
+    except Exception:
+        return base_mpp_x, base_mpp_y
+    if "tissue_hires_image" in image_name:
+        scale = float(scalefactors.get("tissue_hires_scalef", 1.0) or 1.0)
+    elif "tissue_lowres_image" in image_name:
+        scale = float(scalefactors.get("tissue_lowres_scalef", 1.0) or 1.0)
+    else:
+        scale = 1.0
+    if scale <= 0:
+        scale = 1.0
+    return base_mpp_x / scale, base_mpp_y / scale
+
+
 def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     cfg = config["patch_extraction"]
     slides = pd.read_csv(cfg["slides_csv_path"])
@@ -102,6 +129,7 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
             continue
         slide_tiles = _subsample_frame(slide_tiles, max_tiles_per_slide)
         image = Image.open(slide["image_path"]).convert("RGB")
+        source_mpp_x, source_mpp_y = _resolve_effective_mpp(slide, target_mpp)
         slide_patch_dir = ensure_directory(patches_dir / slide["slide_id"])
         coords = slide_tiles[["x_um", "y_um"]].to_numpy(dtype=float)
         edge_index = _knn_edges(coords, graph_k)
@@ -115,8 +143,8 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
                 float(tile["y_um"]),
                 tile_size_um=tile_size_um,
                 patch_size_px=patch_size_px,
-                source_mpp_x=float(slide.get("mpp_x", target_mpp) or target_mpp),
-                source_mpp_y=float(slide.get("mpp_y", target_mpp) or target_mpp),
+                source_mpp_x=source_mpp_x,
+                source_mpp_y=source_mpp_y,
             )
             patch_array = np.asarray(patch, dtype=np.uint8)
             tissue_fraction = _tissue_fraction(patch_array)
