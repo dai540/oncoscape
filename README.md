@@ -11,21 +11,27 @@ The project documentation is now maintained as a Sphinx site under [`docs/`](C:\
 - CLI reference
 - package API reference
 
-## Quick Start
+## HPC Quick Start
 
 ```bash
+git clone https://github.com/dai540/oncoscape.git /project/code/oncoscape
+cd /project/code/oncoscape
 conda env create -f environment.yml
 conda activate oncoscape
 pip install -e .
 pip install sphinx
-python scripts/00_fetch_public_data.py --config configs/breast_hpc.yaml
-python scripts/00_make_public_breast_manifest.py --config configs/breast_hpc.yaml
-python scripts/00_preflight.py --config configs/breast_hpc.yaml
-python scripts/08_run_pipeline.py --config configs/breast_hpc.yaml
-python scripts/09_select_best_seed.py --config configs/breast_hpc.yaml
+python scripts/00_init_hpc_project.py --project-root /project --code-root /project/code/oncoscape
+python scripts/00_fetch_public_data.py --config /project/run/config/breast_hpc.yaml
+python scripts/00_make_public_breast_manifest.py --config /project/run/config/breast_hpc.yaml
+python scripts/00_preflight.py --config /project/run/config/breast_hpc.yaml
+python scripts/08_run_pipeline.py --config /project/run/config/breast_hpc.yaml
+python scripts/09_select_best_seed.py --config /project/run/config/breast_hpc.yaml
 ```
 
-The default HPC config now targets the `deep_spatial_multitask` training path.
+`00_init_hpc_project.py` creates the run-time config and directories under `/project/run`. The generated
+`/project/run/config/breast_hpc.yaml` is the config you should use for jobs.
+
+The default HPC config targets the `deep_spatial_multitask` training path.
 
 For strict holdout experiments, run multiple seeds into a shared `outputs/seed_sweep/` root, then use
 `09_select_best_seed.py` to choose the canonical model by validation score and promote its checkpoints,
@@ -33,9 +39,32 @@ reports, and predictions into the standard output locations.
 
 For public breast runs, the intended order is:
 
-1. fetch the public datasets defined in `configs/breast_downloads.template.yaml`
-2. assemble a source manifest from the downloaded directory layout
-3. run preflight and the full pipeline
+1. initialize the project layout and generated config under `/project/run/config`
+2. fetch the public datasets defined in `/project/run/config/breast_downloads.yaml`
+3. assemble a source manifest from the downloaded directory layout
+4. run preflight and the full pipeline
+
+If you already placed public datasets on the cluster, set `--data-root` when running
+`00_init_hpc_project.py` and skip the fetch step.
+
+## Clean Clone Validation
+
+Run these checks on a fresh clone before submitting a long HPC job:
+
+```bash
+python scripts/00_init_hpc_project.py --project-root /project --code-root /project/code/oncoscape
+python scripts/00_make_public_breast_manifest.py --config /project/run/config/breast_hpc.yaml
+python scripts/00_preflight.py --config /project/run/config/breast_hpc.yaml
+python scripts/08_run_pipeline.py --config /project/run/config/breast_hpc.yaml --dry-run
+```
+
+If `00_preflight.py` fails, fix the generated config or the public-data layout before launching the full run.
+
+Launch the full HPC job with:
+
+```bash
+sbatch scripts/cluster/run_breast_pipeline.slurm
+```
 
 The real-data ingestion path now supports:
 

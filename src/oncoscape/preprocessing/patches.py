@@ -84,9 +84,6 @@ def _resolve_effective_mpp(slide: dict[str, Any], target_mpp: float) -> tuple[fl
 
 def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     cfg = config["patch_extraction"]
-    slides = pd.read_csv(cfg["slides_csv_path"])
-    slides = slides[slides["source_type"].isin(["visium", "xenium"]) & slides["image_path"].fillna("").ne("")].reset_index(drop=True)
-    teachers = ad.read_h5ad(cfg["teacher_labels_path"])
     patches_dir = Path(cfg["patches_dir"])
     graphs_dir = Path(cfg["graphs_dir"])
     tile_dataset_path = Path(cfg["tile_dataset_path"])
@@ -97,9 +94,13 @@ def extract_patches_and_graphs(config: dict[str, Any], dry_run: bool = False) ->
         "dry_run": dry_run,
     }
     if dry_run:
-        outputs["num_slides"] = int(slides["slide_id"].nunique())
-        outputs["n_teacher_tiles"] = int(teachers.n_obs)
+        outputs["expected_slide_registry"] = str(Path(cfg["slides_csv_path"]).resolve())
+        outputs["expected_teachers"] = str(Path(cfg["teacher_labels_path"]).resolve())
         return outputs
+
+    slides = pd.read_csv(cfg["slides_csv_path"])
+    slides = slides[slides["source_type"].isin(["visium", "xenium"]) & slides["image_path"].fillna("").ne("")].reset_index(drop=True)
+    teachers = ad.read_h5ad(cfg["teacher_labels_path"])
 
     ensure_directory(patches_dir)
     ensure_directory(graphs_dir)

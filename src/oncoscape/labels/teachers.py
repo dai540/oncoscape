@@ -334,8 +334,6 @@ def _composition_from_scvi_label_transfer(
 def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     teachers = config["teachers"]
     tasks = config["tasks"]
-    slides = pd.read_csv(teachers["slides_csv_path"])
-    slides = slides[slides["source_type"].isin(["visium", "xenium"])].reset_index(drop=True)
     outputs = {
         "output_h5ad_path": str(Path(teachers["output_h5ad_path"]).resolve()),
         "output_ontology_json": str(Path(teachers["output_ontology_json"]).resolve()),
@@ -345,8 +343,12 @@ def build_teachers(config: dict[str, Any], dry_run: bool = False) -> dict[str, A
         "dry_run": dry_run,
     }
     if dry_run:
-        outputs["num_slides"] = int(len(slides))
+        outputs["expected_slide_registry"] = str(Path(teachers["slides_csv_path"]).resolve())
+        outputs["reference_h5ad_path"] = str(Path(teachers["reference_h5ad_path"]).resolve())
         return outputs
+
+    slides = pd.read_csv(teachers["slides_csv_path"])
+    slides = slides[slides["source_type"].isin(["visium", "xenium"])].reset_index(drop=True)
 
     reference = ad.read_h5ad(teachers["reference_h5ad_path"])
     ref_genes, ref_signatures = _build_reference_signatures(reference, tasks["composition_classes"])
