@@ -1,92 +1,30 @@
 sources:
-  - name: wu2021_visium_case_01
+  - name: wu2021_visium
     source_type: visium
-    platform: visium
-    patient_id: wu_patient_001
-    slide_id: wu_slide_001
-    image_path: /project/data/breast/wu2021_visium/case_01/tissue_hires_image.png
-    counts_path: /project/data/breast/wu2021_visium/case_01/filtered_count_matrix
-    annotation_path: /project/data/breast/wu2021_visium/case_01/pathology_metadata.csv
-    coord_path: /project/data/breast/wu2021_visium/case_01/spatial
-    mpp_x: 0.5
-    mpp_y: 0.5
-    coord_unit: micron
-    split: train
-
-  - name: tenx_visium_ffpe_case_01
-    source_type: visium
-    platform: visium_ffpe
-    patient_id: tenx_ffpe_patient_001
-    slide_id: tenx_ffpe_slide_001
-    image_path: /project/data/breast/tenx_visium_ffpe/case_01/tissue_hires_image.png
-    counts_path: /project/data/breast/tenx_visium_ffpe/case_01/filtered_count_matrix
-    annotation_path: /project/data/breast/tenx_visium_ffpe/case_01/annotation.csv
-    coord_path: /project/data/breast/tenx_visium_ffpe/case_01/spatial
-    mpp_x: 0.5
-    mpp_y: 0.5
-    coord_unit: micron
-    split: train
-
-  - name: tenx_visium_ff_case_01
-    source_type: visium
-    platform: visium_fresh_frozen
-    patient_id: tenx_ff_patient_001
-    slide_id: tenx_ff_slide_001
-    image_path: /project/data/breast/tenx_visium_ff/case_01/tissue_hires_image.png
-    counts_path: /project/data/breast/tenx_visium_ff/case_01/filtered_count_matrix
-    annotation_path: /project/data/breast/tenx_visium_ff/case_01/annotation.csv
-    coord_path: /project/data/breast/tenx_visium_ff/case_01/spatial
-    mpp_x: 0.5
-    mpp_y: 0.5
-    coord_unit: micron
-    split: val
-
-  - name: tenx_xenium_breast_case_01
+    image_path: /project/data/breast/wu2021_visium/IMAGE_FILE
+    counts_path: /project/data/breast/wu2021_visium/COUNTS_FILE
+    annotation_path: /project/data/breast/wu2021_visium/ANNOTATION_FILE
+  - name: tenx_xenium_breast
     source_type: xenium
-    platform: xenium
-    patient_id: xenium_patient_001
-    slide_id: xenium_slide_001
-    image_path: /project/data/breast/tenx_xenium_breast/case_01/he_image.ome.tif
-    counts_path: /project/data/breast/tenx_xenium_breast/case_01/cell_feature_matrix
-    annotation_path: /project/data/breast/tenx_xenium_breast/case_01/cells.csv
-    coord_path: /project/data/breast/tenx_xenium_breast/case_01/cells.csv
-    mpp_x: 0.5
-    mpp_y: 0.5
-    coord_unit: micron
-    split: train
-
+    image_path: /project/data/breast/tenx_xenium_breast/IMAGE_FILE
+    counts_path: /project/data/breast/tenx_xenium_breast/COUNTS_FILE
+    annotation_path: /project/data/breast/tenx_xenium_breast/CELLS_FILE
   - name: gse176078
     source_type: scrna
-    platform: geo_scrna
-    patient_id: gse176078
-    slide_id: gse176078_reference
-    image_path: ""
-    counts_path: /project/data/breast/wu_scrna/GSE176078_counts
-    annotation_path: /project/data/breast/wu_scrna/GSE176078_metadata.csv
-    coord_path: ""
-    coord_unit: micron
-    split: train
+    counts_path: /project/data/breast/gse176078/COUNT_DIR
+*** Add File: C:\Users\daiki\Desktop\codex\oncoscape\ontology\breast.yaml
+compartments:
+  - invasive_tumor
+  - in_situ_tumor
+  - stroma
+  - immune_rich
+  - adipose_normal
+  - necrosis_background
 
-  - name: gse161529
-    source_type: scrna
-    platform: geo_scrna
-    patient_id: gse161529
-    slide_id: gse161529_reference
-    image_path: ""
-    counts_path: /project/data/breast/gse161529/GSE161529_counts
-    annotation_path: /project/data/breast/gse161529/GSE161529_metadata.csv
-    coord_path: ""
-    coord_unit: micron
-    split: train
-
-  - name: gse235326
-    source_type: scrna
-    platform: geo_scrna
-    patient_id: gse235326
-    slide_id: gse235326_reference
-    image_path: ""
-    counts_path: /project/data/breast/gse235326/GSE235326_counts
-    annotation_path: /project/data/breast/gse235326/GSE235326_metadata.csv
-    coord_path: ""
-    coord_unit: micron
-    split: train
+broad_cell_types:
+  - malignant
+  - CAF
+  - endothelial
+  - myeloid
+  - T_NK
+  - B_plasma

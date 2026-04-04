@@ -2,20 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import Callable
 
-from oncoscape.config import load_config
+from oncoscape.core import load_yaml
 
 
-def build_parser(description: str) -> argparse.ArgumentParser:
+def run_step(description: str, handler: Callable[[dict], dict]) -> None:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--dry-run", action="store_true", help="Validate config and emit planned outputs")
-    return parser
-
-
-def run_cli(description: str, handler):
-    parser = build_parser(description)
+    parser.add_argument("--config", required=True, help="Path to breast_hpc.yaml")
     args = parser.parse_args()
-    config = load_config(args.config)
-    result = handler(config=config, dry_run=args.dry_run)
-    print(json.dumps(result, indent=2))
+    config = load_yaml(args.config)
+    print(json.dumps(handler(config), indent=2))

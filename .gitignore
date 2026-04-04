@@ -1,4 +1,3 @@
-.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -7,13 +6,7 @@ __pycache__/
 data/
 run/
 outputs/
-demo_data/
 tmp_*
-tmp_*/
-!src/oncoscape/data/
-!src/oncoscape/data/*.py
-docs/_build/
-docs/_autosummary/
 
 *.pt
 *.h5ad

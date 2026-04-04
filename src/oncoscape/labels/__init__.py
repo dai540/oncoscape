@@ -1,3 +1,3 @@
-from .teachers import build_teachers
+from .teachers import build_teacher_plan
 
-__all__ = ["build_teachers"]
+__all__ = ["build_teacher_plan"]

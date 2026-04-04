@@ -1,107 +1,114 @@
-# oncoscape
+# OncoScape
 
-`oncoscape` is an HPC-first research pipeline for building breast cancer spatial biology models from public H&E whole-slide images and public spatial / single-cell references, with a Sphinx documentation site and a deep multitask training path.
+**HEST-compatible breast specialization layer for high-confidence spatial maps from H&E WSI**
 
-The project documentation is now maintained as a Sphinx site under [`docs/`](C:\Users\daiki\Desktop\codex\oncoscape\docs). Start there for:
+OncoScape is a simple HPC-first proposal for breast cancer spatial pathology. It does **not** try to replace HEST. Instead, it adds breast-specific teacher integration, ontology, rendering, and reporting on top of a HEST-compatible workflow.
 
-- installation
-- public-data download setup
-- source manifest preparation
-- end-to-end pipeline execution
-- CLI reference
-- package API reference
+## Goal
 
-## HPC Quick Start
+Use breast cancer H&E WSI as input and produce only the spatial maps that are most likely to be accurate in a first release:
 
-```bash
-git clone https://github.com/dai540/oncoscape.git /project/code/oncoscape
-cd /project/code/oncoscape
-conda env create -f environment.yml
-conda activate oncoscape
-pip install -e .
-pip install sphinx
-python scripts/00_init_hpc_project.py --project-root /project --code-root /project/code/oncoscape
-python scripts/00_fetch_public_data.py --config /project/run/config/breast_hpc.yaml
-python scripts/00_make_public_breast_manifest.py --config /project/run/config/breast_hpc.yaml
-python scripts/00_preflight.py --config /project/run/config/breast_hpc.yaml
-python scripts/08_run_pipeline.py --config /project/run/config/breast_hpc.yaml
-python scripts/09_select_best_seed.py --config /project/run/config/breast_hpc.yaml
-```
+1. `compartment map`
+2. `broad cell-type / TME map`
+3. `program/activity map`
+4. `uncertainty map`
+5. `slide-level summary`
 
-`00_init_hpc_project.py` creates the run-time config and directories under `/project/run`. The generated
-`/project/run/config/breast_hpc.yaml` is the config you should use for jobs.
+## What v3 deliberately does not do
 
-The default HPC config targets the `deep_spatial_multitask` training path.
+- full transcriptome prediction
+- pan-cancer foundation model training from scratch
+- diagnosis support
+- local-PC full training
 
-For strict holdout experiments, run multiple seeds into a shared `outputs/seed_sweep/` root, then use
-`09_select_best_seed.py` to choose the canonical model by validation score and promote its checkpoints,
-reports, and predictions into the standard output locations.
+## Required data
 
-For public breast runs, the intended order is:
+- Wu 2021 breast spatial atlas
+- 10x Visium FFPE breast cancer
+- 10x Visium fresh frozen breast cancer
+- 10x Xenium breast cancer
+- GSE176078
+- GSE161529
 
-1. initialize the project layout and generated config under `/project/run/config`
-2. fetch the public datasets defined in `/project/run/config/breast_downloads.yaml`
-3. assemble a source manifest from the downloaded directory layout
-4. run preflight and the full pipeline
+Recommended:
 
-If you already placed public datasets on the cluster, set `--data-root` when running
-`00_init_hpc_project.py` and skip the fetch step.
+- GSE235326
 
-## Clean Clone Validation
+## Required external tools
 
-Run these checks on a fresh clone before submitting a long HPC job:
+- `HEST`
+- `scvi-tools`
+- `cell2location`
+- `OpenSlide`
+- a pathology foundation encoder
 
-```bash
-python scripts/00_init_hpc_project.py --project-root /project --code-root /project/code/oncoscape
-python scripts/00_make_public_breast_manifest.py --config /project/run/config/breast_hpc.yaml
-python scripts/00_preflight.py --config /project/run/config/breast_hpc.yaml
-python scripts/08_run_pipeline.py --config /project/run/config/breast_hpc.yaml --dry-run
-```
-
-If `00_preflight.py` fails, fix the generated config or the public-data layout before launching the full run.
-
-Launch the full HPC job with:
-
-```bash
-sbatch scripts/cluster/run_breast_pipeline.slurm
-```
-
-The real-data ingestion path now supports:
-
-- 10x Visium HDF5 matrices
-- 10x / GEO sparse matrix directories
-- Visium `spatial/` folders with `tissue_positions*.csv`
-- Wu/GEO-style scRNA raw sample directories
-
-## Validate The Pipeline
-
-Run the lightweight accuracy-oriented regression tests before launching a large HPC job:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-The deep pipeline test exercises the real `register -> reference -> teachers -> patches -> train -> eval`
-path on a synthetic dataset and requires strong held-out accuracy thresholds.
-
-## Build Sphinx Documentation
-
-```bash
-sphinx-build -b html docs/source docs/_build/html
-```
-
-Open:
-
-- `docs/_build/html/index.html`
-
-## Repository Layout
+## Minimal repository layout
 
 ```text
 oncoscape/
   README.md
-  docs/
+  pyproject.toml
+  environment.yml
   configs/
+    breast_hpc.yaml
+    breast_sources.template.yaml
   ontology/
+    breast.yaml
+    breast_programs.yaml
   scripts/
+    00_fetch_and_manifest.py
+    01_register_data.py
+    02_build_reference.py
+    03_build_teachers.py
+    04_extract_tiles.py
+    05_train_model.py
+    06_eval_and_render.py
   src/oncoscape/
+    bootstrap/
+    cli/
+    core/
+    data/
+    validation/
+    reference/
+    labels/
+    preprocessing/
+    models/
+    training/
+    evaluation/
+    rendering/
+    reporting/
 ```
+
+## Minimal steps
+
+### 00 Fetch and manifest
+
+Download public breast datasets and assemble a source manifest.
+
+### 01 Register data
+
+Create `slides.csv`, `gene_symbol_map.csv`, and registered `h5ad` files.
+
+### 02 Build reference
+
+Build a breast-specific broad-cell-type reference atlas from scRNA data.
+
+### 03 Build teachers
+
+Build pathology-reviewed compartment labels and spatial composition teachers.
+
+### 04 Extract tiles
+
+Extract 112 um tiles, run QC, and construct spatial graphs.
+
+### 05 Train model
+
+Train a compartment-first, broad-TME-first model using a pathology foundation encoder.
+
+### 06 Evaluate and render
+
+Run strict holdout evaluation and render maps for pathology and wet-lab review.
+
+## Scope of this repository
+
+This repository is currently a **v3 scaffold and specification-first implementation target**. The code is intentionally kept minimal while the design is narrowed to the highest-confidence maps first.

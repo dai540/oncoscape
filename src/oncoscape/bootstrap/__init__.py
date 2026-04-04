@@ -1,3 +1,1 @@
-from .project import initialize_hpc_project
-
-__all__ = ["initialize_hpc_project"]
+"""Bootstrap helpers for the minimal OncoScape v3 scaffold."""

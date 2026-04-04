@@ -1,4 +1,3 @@
-from .spec import build_model_spec
-from .deep import DeepSpatialMultiTaskModel
+from .spec import model_spec
 
-__all__ = ["build_model_spec", "DeepSpatialMultiTaskModel"]
+__all__ = ["model_spec"]
