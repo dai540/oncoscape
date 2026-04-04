@@ -1,5 +1,5 @@
 from oncoscape.cli._common import run_step
-from oncoscape.training import train_model_plan
+from oncoscape.plans import train_model_plan
 
 
 def main() -> None:

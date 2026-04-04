@@ -1,5 +1,5 @@
 from oncoscape.cli._common import run_step
-from oncoscape.labels import build_teacher_plan
+from oncoscape.plans import build_teacher_plan
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
 from oncoscape.cli._common import run_step
-from oncoscape.preprocessing import extract_tiles_plan
+from oncoscape.plans import extract_tiles_plan
 
 
 def main() -> None:

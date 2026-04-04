@@ -1,5 +1,5 @@
 from oncoscape.cli._common import run_step
-from oncoscape.data import fetch_and_manifest_plan
+from oncoscape.plans import fetch_and_manifest_plan
 
 
 def main() -> None:

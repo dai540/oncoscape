@@ -1,98 +1,37 @@
 # OncoScape
 
-**HEST-compatible breast spatial state generator for H&E whole-slide images**
+`OncoScape` is an HPC-oriented script set for breast cancer spatial pathology.
 
-OncoScape is a breast-focused, HPC-first research layer built on top of existing spatial pathology tooling. It is **not** a replacement for HEST, and it is **not** a treatment-selection model by itself.
+It is built around one short idea:
 
-Its role is simpler and narrower:
+- use strong existing tools such as `HEST`, `scvi-tools`, and `cell2location`
+- define a clear breast-specific contract for spatial map generation
+- hand off a `biomarker_feature_table` to downstream predictive biomarker workflows
 
-- take breast cancer H&E WSI as input
-- integrate public spatial and single-cell references during training
-- generate high-confidence spatial state maps
-- export structured slide-level features that can be passed to downstream predictive biomarker models
+`OncoScape` is **not** an end-to-end model implementation in this repository. It is a **script-first, specification-first HPC scaffold**.
 
-In other words, **OncoScape is an upstream spatial state generator**.
+## What it is
 
-## What OncoScape does
+`OncoScape core` is an upstream H&E-to-spatial-state layer. It defines how to:
 
-OncoScape produces the spatial outputs that are most realistic to estimate with reasonable confidence in a first release:
+- fetch and register public breast spatial data
+- build breast-specific references and teachers
+- define planned tile extraction, training, and evaluation contracts
+- export `biomarker_feature_table`
 
-1. `compartment map`
-   - invasive_tumor
-   - in_situ_tumor
-   - stroma
-   - immune_rich
-   - adipose_normal
-   - necrosis_background
-2. `broad cell-type / TME map`
-   - malignant
-   - CAF
-   - endothelial
-   - myeloid
-   - T_NK
-   - B_plasma
-3. `program/activity map`
-   - proliferation
-   - hypoxia
-   - EMT
-   - IFN_gamma
-   - angiogenesis
-   - inflammatory
-4. `uncertainty map`
-5. `slide-level summary`
-6. `biomarker_feature_table`
-   - a structured feature table derived from the spatial outputs
-   - intended for downstream predictive biomarker modeling
+`OncoScape adapter` is a downstream handoff contract. It defines how to:
 
-## What OncoScape does not do
+- take `biomarker_feature_table`
+- join clinical metadata and endpoints
+- prepare inputs for PBMF-like or SELECT/ENLIGHT-like biomarker models
 
-OncoScape does not directly perform:
+## What it is not
 
-- full transcriptome prediction
-- pan-cancer foundation model training from scratch
-- diagnosis support
-- treatment recommendation
-- response prediction as a final clinical model
-
-These belong to downstream models, not to OncoScape core.
-
-## Design principle
-
-OncoScape follows a simple rule:
-
-**Use existing strong tools whenever possible, and only implement the missing breast-specific integration layer.**
-
-The project is designed around:
-
-- `HEST` for compatible task structure and benchmarking concepts
-- `scvi-tools` for reference integration and transfer
-- `cell2location` for Visium-based composition teachers
-- `OpenSlide` for WSI access
-- a pathology foundation encoder for image features
-
-## Why this project exists
-
-Existing tools already cover many important pieces of the pipeline, but they do not directly provide a breast-specific, HPC-oriented layer that combines:
-
-- public breast spatial data
-- pathology-reviewed compartment teachers
-- Xenium-enhanced broad TME teachers
-- breast-specific ontology
-- wet-lab and pathology-oriented outputs
-- exportable biomarker features for downstream predictive modeling
-
-That is the role of OncoScape.
-
-## Core idea
-
-OncoScape should be used like this:
-
-- **OncoScape core**
-  - generates spatial maps and structured spatial state features from H&E
-- **Downstream biomarker adapter**
-  - converts those features into input for predictive biomarker models such as PBMF-like or SELECT/ENLIGHT-like frameworks
-
-This separation is intentional. It keeps the spatial modeling problem distinct from the treatment-benefit modeling problem.
+- full transcriptome prediction code
+- pan-cancer foundation model training code
+- treatment recommendation software
+- diagnosis software
+- a local-PC training package
 
 ## Required data
 
@@ -109,7 +48,92 @@ Recommended:
 
 - GSE235326
 
-## Minimal repository layout
+## Required external tools
+
+- `HEST`
+- `scvi-tools`
+- `cell2location`
+- `OpenSlide`
+- a pathology foundation encoder
+
+## Installation
+
+Create an environment and install the lightweight scaffold dependencies:
+
+```bash
+conda env create -f environment.yml
+conda activate oncoscape
+pip install -e .
+```
+
+This repository intentionally keeps Python dependencies light because the real heavy lifting is expected to happen through external tools on HPC.
+
+## Quick start
+
+Run the numbered scripts in order:
+
+```bash
+python scripts/00_fetch_and_manifest.py --config configs/breast_hpc.yaml
+python scripts/01_register_data.py --config configs/breast_hpc.yaml
+python scripts/02_build_reference.py --config configs/breast_hpc.yaml
+python scripts/03_build_teachers.py --config configs/breast_hpc.yaml
+python scripts/04_extract_tiles.py --config configs/breast_hpc.yaml
+python scripts/05_train_model.py --config configs/breast_hpc.yaml
+python scripts/06_eval_and_render.py --config configs/breast_hpc.yaml
+python scripts/07_run_biomarker_adapter.py --config configs/breast_hpc.yaml
+```
+
+Each script currently prints the **planned contract** for that stage. That keeps the repository honest about its current status while fixing the HPC execution interface.
+
+## SLURM example
+
+```bash
+sbatch scripts/submit_oncoscape.slurm
+```
+
+Edit the config path, environment name, and project paths before use.
+
+## Main outputs
+
+Planned `OncoScape core` outputs:
+
+- `compartment_map`
+- `broad_tme_map`
+- `program_map`
+- `uncertainty_map`
+- `slide_summary`
+- `biomarker_feature_table`
+
+Planned `OncoScape adapter` outputs:
+
+- `biomarker_score`
+- `response_probability`
+- `subgroup_report`
+- `utility_metrics`
+
+## biomarker_feature_table
+
+The `biomarker_feature_table` is the formal handoff from spatial modeling to downstream biomarker modeling.
+
+Minimum columns:
+
+- `slide_id`
+- `patient_id`
+- `source`
+- `split`
+- `n_tiles_total`
+- `n_tiles_qc_pass`
+
+Minimum feature groups:
+
+- compartment fractions
+- broad TME means
+- program burdens
+- spatial interaction features
+- hotspot features
+- uncertainty-aware features
+
+## Repository layout
 
 ```text
 oncoscape/
@@ -131,117 +155,32 @@ oncoscape/
     05_train_model.py
     06_eval_and_render.py
     07_run_biomarker_adapter.py
+    submit_oncoscape.slurm
   src/oncoscape/
-    bootstrap/
+    __init__.py
+    plans.py
     cli/
     core/
-    data/
-    validation/
-    reference/
-    labels/
-    preprocessing/
-    models/
-    training/
-    evaluation/
-    rendering/
-    reporting/
-    adapter/
 ```
 
-## Core steps
+## Current status
 
-### 00 Fetch and manifest
+This repository is a **script set for HPC execution planning**, not a finished spatial modeling engine.
 
-Download public breast datasets and assemble a source manifest.
+What is already fixed:
 
-### 01 Register data
+- breast-specific scope
+- required datasets
+- core versus adapter split
+- `biomarker_feature_table` contract
+- numbered step-by-step scripts
 
-Create `slides.csv`, `gene_symbol_map.csv`, and registered `h5ad` files.
+What is intentionally not included here:
 
-### 02 Build reference
+- the full model implementation
+- the full training engine
+- the full evaluation engine
 
-Build a breast-specific broad-cell-type reference atlas from scRNA data.
+## Author
 
-### 03 Build teachers
-
-Build pathology-reviewed compartment labels and spatial composition teachers.
-
-### 04 Extract tiles
-
-Extract 112 um tiles, run QC, and construct spatial graphs.
-
-### 05 Train model
-
-Train a compartment-first, broad-TME-first model using a pathology foundation encoder.
-
-### 06 Evaluate and render
-
-Run strict holdout evaluation, render maps, and export `biomarker_feature_table`.
-
-### 07 Run biomarker adapter
-
-Transform `biomarker_feature_table` into downstream predictive biomarker model inputs.
-
-## `biomarker_feature_table`
-
-This table is the formal handoff from OncoScape core to downstream biomarker modeling.
-
-Minimum output path:
-
-- `outputs/reports/biomarker_feature_table.parquet`
-
-Minimum key columns:
-
-- `slide_id`
-- `patient_id`
-- `source`
-- `split`
-- `n_tiles_total`
-- `n_tiles_qc_pass`
-
-Minimum feature groups:
-
-- compartment fractions
-- broad TME means
-- program burdens
-- spatial interaction features
-- hotspot features
-- uncertainty-aware features
-
-## Responsibility split
-
-### OncoScape core
-
-Owns:
-
-- data fetch
-- registry
-- reference atlas building
-- teacher building
-- tile extraction
-- spatial modeling
-- map generation
-- uncertainty estimation
-- slide summary generation
-- biomarker feature table generation
-
-Does not own:
-
-- treatment benefit prediction
-- therapy response classification
-- clinical thresholding
-- deployable assay lock-down
-
-### Biomarker adapter
-
-Owns:
-
-- consuming `biomarker_feature_table`
-- joining clinical metadata
-- preparing treated/control or responder/non-responder labels
-- fitting downstream predictive biomarker models
-- clinical utility evaluation
-
-## Scope of this repository
-
-This repository is a **HEST-compatible breast specialization layer** and an **upstream spatial feature generator**. It should remain narrow, composable, and easy to connect to existing downstream biomarker pipelines.
+`OncoScape` is maintained by Dai.

@@ -1,5 +1,5 @@
-from oncoscape.adapter import biomarker_adapter_spec
 from oncoscape.cli._common import run_step
+from oncoscape.plans import biomarker_adapter_spec
 
 
 def main() -> None:
