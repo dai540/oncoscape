@@ -1,6 +1,6 @@
 project:
   name: oncoscape-v3
-  mode: hest-compatible-breast-layer
+  mode: hest-compatible-breast-spatial-state-generator
 
 paths:
   project_root: /project
@@ -33,6 +33,8 @@ targets:
   secondary:
     - programs
     - uncertainty
+  exported_features:
+    - biomarker_feature_table
 
 tiling:
   tile_size_um: 112
@@ -43,6 +45,72 @@ model:
   strategy: compartment_first_broad_tme_first
   encoder: pathology_foundation_model
   spatial_module: lightweight_spatial_transformer
+
+feature_table:
+  unit: slide
+  required_id_columns:
+    - slide_id
+    - patient_id
+    - source
+    - split
+    - n_tiles_total
+    - n_tiles_qc_pass
+  compartment_features:
+    - frac_invasive_tumor
+    - frac_in_situ_tumor
+    - frac_stroma
+    - frac_immune_rich
+    - frac_adipose_normal
+    - frac_necrosis_background
+  composition_features:
+    - mean_malignant
+    - mean_CAF
+    - mean_endothelial
+    - mean_myeloid
+    - mean_T_NK
+    - mean_B_plasma
+  program_features:
+    - mean_proliferation
+    - mean_hypoxia
+    - mean_EMT
+    - mean_IFN_gamma
+    - mean_angiogenesis
+    - mean_inflammatory
+  topology_features:
+    - tumor_stroma_interface_length
+    - tumor_immune_interface_length
+    - immune_rich_adjacent_to_invasive_fraction
+    - CAF_adjacent_to_tumor_fraction
+    - necrosis_edge_burden
+  hotspot_features:
+    - n_proliferation_hotspots
+    - n_hypoxia_hotspots
+    - n_IFN_gamma_hotspots
+    - largest_immune_hotspot_area
+    - largest_tumor_hotspot_area
+  uncertainty_features:
+    - mean_uncertainty
+    - tumor_region_uncertainty
+    - immune_region_uncertainty
+    - uncertainty_weighted_EMT
+    - uncertainty_weighted_IFN_gamma
+    - uncertainty_weighted_hypoxia
+
+adapter:
+  role: downstream_predictive_biomarker_bridge
+  supported_framework_families:
+    - PBMF_like
+    - SELECT_ENLIGHT_like
+  required_inputs:
+    - biomarker_feature_table
+    - clinical_metadata
+    - treatment_labels
+    - outcome_labels
+  outputs:
+    - biomarker_score
+    - response_probability
+    - subgroup_report
+    - utility_metrics
 
 evaluation:
   strict_holdout: true
@@ -68,3 +136,5 @@ outputs:
   checkpoint_dir: /project/run/outputs/checkpoints
   prediction_dir: /project/run/outputs/predictions
   report_dir: /project/run/outputs/reports
+  biomarker_feature_table: /project/run/outputs/reports/biomarker_feature_table.parquet
+  adapter_dir: /project/run/outputs/adapter

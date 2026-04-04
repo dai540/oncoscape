@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oncoscape"
-version = "0.3.0"
-description = "HEST-compatible breast specialization layer for high-confidence spatial maps from H&E WSI"
+version = "0.4.0"
+description = "HEST-compatible breast spatial state generator and biomarker feature export layer"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -4,6 +4,16 @@ sources:
     image_path: /project/data/breast/wu2021_visium/IMAGE_FILE
     counts_path: /project/data/breast/wu2021_visium/COUNTS_FILE
     annotation_path: /project/data/breast/wu2021_visium/ANNOTATION_FILE
+  - name: tenx_visium_ffpe
+    source_type: visium
+    image_path: /project/data/breast/tenx_visium_ffpe/IMAGE_FILE
+    counts_path: /project/data/breast/tenx_visium_ffpe/COUNTS_FILE
+    annotation_path: /project/data/breast/tenx_visium_ffpe/ANNOTATION_FILE
+  - name: tenx_visium_ff
+    source_type: visium
+    image_path: /project/data/breast/tenx_visium_ff/IMAGE_FILE
+    counts_path: /project/data/breast/tenx_visium_ff/COUNTS_FILE
+    annotation_path: /project/data/breast/tenx_visium_ff/ANNOTATION_FILE
   - name: tenx_xenium_breast
     source_type: xenium
     image_path: /project/data/breast/tenx_xenium_breast/IMAGE_FILE
@@ -12,7 +22,9 @@ sources:
   - name: gse176078
     source_type: scrna
     counts_path: /project/data/breast/gse176078/COUNT_DIR
-*** Add File: C:\Users\daiki\Desktop\codex\oncoscape\ontology\breast.yaml
+  - name: gse161529
+    source_type: scrna
+    counts_path: /project/data/breast/gse161529/COUNT_DIR
 compartments:
   - invasive_tumor
   - in_situ_tumor

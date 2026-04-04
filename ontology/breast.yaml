@@ -13,3 +13,7 @@ broad_cell_types:
   - myeloid
   - T_NK
   - B_plasma
+
+slide_level_outputs:
+  - slide_summary
+  - biomarker_feature_table
