@@ -16,6 +16,11 @@ dependencies = [
   "pandas",
 ]
 
+[project.optional-dependencies]
+docs = [
+  "Sphinx>=8",
+]
+
 [project.urls]
 Homepage = "https://github.com/dai540/oncoscape"
 Repository = "https://github.com/dai540/oncoscape"

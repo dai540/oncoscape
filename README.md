@@ -68,6 +68,13 @@ pip install -e .
 
 This repository intentionally keeps Python dependencies light because the real heavy lifting is expected to happen through external tools on HPC.
 
+To build the documentation:
+
+```bash
+pip install -e .[docs]
+sphinx-build -b html docs/source docs/_build/html
+```
+
 ## Quick start
 
 Run the numbered scripts in order:
@@ -160,7 +167,8 @@ oncoscape/
     __init__.py
     plans.py
     cli/
-    core/
+  docs/
+    source/
 ```
 
 ## Current status

@@ -7,6 +7,7 @@ data/
 run/
 outputs/
 tmp_*
+docs/_build/
 
 *.pt
 *.h5ad
